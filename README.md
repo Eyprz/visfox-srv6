@@ -184,5 +184,6 @@ Not yet:
 
 ## License
 
-[Apache License 2.0](LICENSE). The bundled fonts (Play, M PLUS 2) are under the SIL Open Font License,
+Copyright 2026 Ryuta Futami. Licensed under the [Apache License 2.0](LICENSE) (see also
+[NOTICE](NOTICE)). The bundled fonts (Play, M PLUS 2) are under the SIL Open Font License,
 and the IETF YANG modules under the license stated in each module.

@@ -32,6 +32,7 @@ import (
 	"github.com/eyprz/visfox-srv6/iel/internal/sbi/bgpls"
 	"github.com/eyprz/visfox-srv6/iel/internal/sbi/dryrun"
 	"github.com/eyprz/visfox-srv6/iel/internal/sbi/pce"
+	"github.com/eyprz/visfox-srv6/iel/internal/sbi/vvf"
 	"github.com/eyprz/visfox-srv6/iel/internal/ssot"
 	"github.com/eyprz/visfox-srv6/iel/internal/ssot/ted"
 )
@@ -63,8 +64,11 @@ func run() error {
 	}
 	defer func() { _ = store.Close() }()
 
-	op, err := config.LoadOperator(cfg.OperatorConfigPath, cfg.SRPolicyDriver)
+	op, err := config.LoadOperator(cfg.OperatorConfigPath)
 	if err != nil {
+		return err
+	}
+	if err := op.Override(cfg.SRPolicyDriver, cfg.VVFDriver, cfg.DryRun); err != nil {
 		return err
 	}
 	var src ted.Source = ted.SeedFile{Path: cfg.TEDSeedPath}
@@ -168,28 +172,36 @@ func openDB(ctx context.Context, path string) (*sql.DB, error) {
 	return store, nil
 }
 
-// newProvisioner builds the SFC Provisioner clients from the network operator config: SR Policies
-// go to PolaPCE (PCE NBI client) or are dry-run; the VVF nodes (switchers too) are dry-run until their VNF
-// Manager client exists. With PolaPCE the PCE client is also the monitor Intent Assurance reads the
-// SR Policies from (nil when dry-run).
+// newProvisioner builds the SFC Provisioner clients from the network operator config: SR Policies go
+// to PolaPCE (PCE NBI client) and VVF control (the input selection of switchers, the configs of
+// process VVFs) to the routers' MGMT REST API (VVF control client), or either is dry-run (logged).
+// With PolaPCE the PCE client is also the monitor Intent Assurance reads the SR Policies from (nil
+// when dry-run).
 func newProvisioner(oc config.Orchestrator, res *ssot.Resources, timeout time.Duration, logger *slog.Logger) (*provision.Provisioner, monitor.SRPolicySource, func(), error) {
 	dry := dryrun.Client{Log: func(m string) { logger.Info(m) }}
 	drivers := map[domain.Op]provision.Driver{
 		domain.OpSRPolicySet: dry, domain.OpSRPolicyDelete: dry,
 		domain.OpSwitcherSelect: dry, domain.OpFunctionSetParams: dry,
 	}
+	byHost := map[string]string{}
+	for _, n := range res.TED.Nodes {
+		byHost[n.Hostname] = n.ID
+	}
+	nodeID := func(host string) (string, error) {
+		id, ok := byHost[host]
+		if !ok {
+			return "", fmt.Errorf("orchestrator.nodes: %q is not in the TED", host)
+		}
+		return id, nil
+	}
 	closer := func() {}
 	var mon monitor.SRPolicySource
 	if oc.SRPolicy == config.DriverPolaPCE {
-		byHost := map[string]string{}
-		for _, n := range res.TED.Nodes {
-			byHost[n.Hostname] = n.ID
-		}
 		addrs := map[string]pce.NodeAddress{}
 		for host, a := range oc.Nodes {
-			id, ok := byHost[host]
-			if !ok {
-				return nil, nil, nil, fmt.Errorf("orchestrator.nodes: %q is not in the TED", host)
+			id, err := nodeID(host)
+			if err != nil {
+				return nil, nil, nil, err
 			}
 			var na pce.NodeAddress
 			na.PCEPPeer, _ = netip.ParseAddr(a.PCEPPeer)
@@ -205,7 +217,25 @@ func newProvisioner(oc config.Orchestrator, res *ssot.Resources, timeout time.Du
 		mon = pola
 		logger.Info("SR Policies go to PolaPCE", "address", oc.PolaPCE.Address)
 	} else {
-		logger.Info("SR Policies are dry-run (orchestrator.sr_policy: dryrun)")
+		logger.Info("SR Policies are dry-run (logged)")
+	}
+	if oc.VVF == config.DriverMGMT {
+		mgmt := map[string]string{}
+		for host, a := range oc.Nodes {
+			if a.MGMT == "" {
+				continue
+			}
+			id, err := nodeID(host)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			mgmt[id] = a.MGMT
+		}
+		ctl := vvf.New(mgmt, nil)
+		drivers[domain.OpSwitcherSelect], drivers[domain.OpFunctionSetParams] = ctl, ctl
+		logger.Info("VVF control goes to the routers' MGMT REST API", "nodes", len(mgmt))
+	} else {
+		logger.Info("VVF control is dry-run (logged)")
 	}
 	return provision.New(provision.Options{
 		Drivers: drivers, Timeout: timeout, Settle: time.Duration(oc.VVFSettleMs) * time.Millisecond,

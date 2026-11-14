@@ -81,3 +81,39 @@ func TestLoadOperatorRejectsUnknownFields(t *testing.T) {
 }
 
 func writeFile(path, body string) error { return os.WriteFile(path, []byte(body), 0o600) }
+
+func TestOperatorDrivers(t *testing.T) {
+	path := t.TempDir() + "/op.yaml"
+	body := "sid_rule: {name: d4s-testbed}\norchestrator:\n  polapce: {address: \"a:1\"}\n  nodes:\n    SW: {mgmt: \"http://10.0.0.1:8080\"}\n"
+	if err := writeFile(path, body); err != nil {
+		t.Fatal(err)
+	}
+	op, err := LoadOperator(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Orchestrator.SRPolicy != DriverDryRun || op.Orchestrator.VVF != DriverDryRun {
+		t.Fatalf("defaults = %+v", op.Orchestrator)
+	}
+	if err := op.Override(DriverPolaPCE, DriverMGMT, false); err != nil || op.Orchestrator.SRPolicy != DriverPolaPCE || op.Orchestrator.VVF != DriverMGMT {
+		t.Fatalf("override = %+v, %v", op.Orchestrator, err)
+	}
+	// Dry run wins over every driver.
+	if err := op.Override("", "", true); err != nil || op.Orchestrator.SRPolicy != DriverDryRun || op.Orchestrator.VVF != DriverDryRun {
+		t.Fatalf("dry run = %+v, %v", op.Orchestrator, err)
+	}
+	if err := op.Override("", "d4s", false); err == nil {
+		t.Fatal("unknown VVF driver accepted")
+	}
+	for _, bad := range []string{
+		"sid_rule: {name: d4s-testbed}\norchestrator: {vvf: d4s}\n",
+		"sid_rule: {name: d4s-testbed}\norchestrator:\n  nodes:\n    SW: {mgmt: \"10.0.0.1:8080\"}\n",
+	} {
+		if err := writeFile(path, bad); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadOperator(path); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

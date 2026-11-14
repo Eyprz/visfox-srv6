@@ -62,9 +62,12 @@ limits:
   standby_feed: switcher
 
 # Southbound drivers. SR Policies: dryrun (log only) or polapce (PolaPCE
-# gRPC -> PCEP -> headend). Switchers and VVF nodes are dry-run until the d4s driver exists.
+# gRPC -> PCEP -> headend). VVF control (switcher input selection, VVF configs): dryrun or mgmt (the
+# routers' MGMT REST API, orchestrator.nodes.<host>.mgmt). dryrun only logs (checks, validation, demos);
+# VISFOX_SR_POLICY / VISFOX_VVF override the drivers, VISFOX_DRY_RUN=true makes everything dry-run.
 orchestrator:
   sr_policy: dryrun
+  vvf: dryrun
   polapce:
     address: "172.31.77.2:50052"
     asn: 65000

@@ -3,7 +3,7 @@
 // its own package and data:
 //
 //	plan      SFCRequest -> SFP          (SFC Validator for resources, path selection)
-//	render    SFP -> domain.Plan          (SR Policies, switcher selections, VVF configs, in order)
+//	render    SFP -> domain.Plan          (SR Policies, VVF instructions: switcher selections and configs)
 //	provision domain.Plan -> SBI clients  (configure / provision: live or dry run)
 //
 // The Orchestrator keeps what it derived from the intents and provisioned (the selected SFPs, the

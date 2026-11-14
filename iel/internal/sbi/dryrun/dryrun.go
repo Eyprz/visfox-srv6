@@ -1,6 +1,7 @@
 // Package dryrun is the dry-run client of the SFC Provisioner: it logs the instructions instead of
-// sending them (orchestrator.sr_policy: dryrun, and switchers / VVF nodes until their VNF Manager
-// client exists).
+// sending them. It serves health checks, validation and demos without touching the network: per
+// instruction kind (orchestrator.sr_policy / orchestrator.vvf: dryrun) or for all of them
+// (-dry-run, VISFOX_DRY_RUN).
 package dryrun
 
 import (

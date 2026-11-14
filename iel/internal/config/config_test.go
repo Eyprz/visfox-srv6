@@ -44,3 +44,16 @@ func TestLoadRouterTimeout(t *testing.T) {
 		t.Fatal("expected an error for an invalid timeout")
 	}
 }
+
+func TestLoadDrivers(t *testing.T) {
+	t.Setenv("VISFOX_VVF", "mgmt")
+	t.Setenv("VISFOX_DRY_RUN", "true")
+	cfg, err := Load(nil)
+	if err != nil || cfg.VVFDriver != "mgmt" || !cfg.DryRun {
+		t.Fatalf("cfg = %+v, %v", cfg, err)
+	}
+	t.Setenv("VISFOX_DRY_RUN", "")
+	if cfg, err = Load([]string{"-dry-run"}); err != nil || !cfg.DryRun {
+		t.Fatalf("flag: cfg = %+v, %v", cfg, err)
+	}
+}

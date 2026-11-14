@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"net/netip"
+	"net/url"
 	"os"
 
 	"go.yaml.in/yaml/v3"
@@ -48,18 +49,25 @@ type TEDSource struct {
 	GoBGP string `yaml:"gobgp"`
 }
 
-// SR Policy drivers (Orchestrator.SRPolicy).
+// Southbound drivers: SR Policies (Orchestrator.SRPolicy) and VVF control (Orchestrator.VVF).
 const (
-	DriverDryRun  = "dryrun"
+	// DriverDryRun logs the instructions instead of sending them (health checks, validation, demos).
+	DriverDryRun = "dryrun"
+	// DriverPolaPCE sends SR Policies to PolaPCE (gRPC -> PCEP -> headends).
 	DriverPolaPCE = "polapce"
+	// DriverMGMT controls the VVFs over their routers' MGMT REST API (internal/sbi/vvf).
+	DriverMGMT = "mgmt"
 )
 
 // Orchestrator is the southbound part of the network operator config.
 type Orchestrator struct {
 	// SRPolicy is the driver of the SR Policy instructions: "dryrun" (default, log only) or
-	// "polapce". Switchers and VVF nodes are dry-run until the d4s driver exists.
+	// "polapce".
 	SRPolicy string `yaml:"sr_policy"`
-	PolaPCE  struct {
+	// VVF is the driver of the VVF control instructions (switcher input selection, VVF configs):
+	// "dryrun" (default, log only) or "mgmt" (the routers' MGMT REST API, nodes.<host>.mgmt).
+	VVF     string `yaml:"vvf"`
+	PolaPCE struct {
 		// Address is polad's gRPC server (host:port).
 		Address string `yaml:"address"`
 		// ASN is passed with every request (Pola's TED is per AS).
@@ -78,10 +86,12 @@ type Orchestrator struct {
 	VVFSettleMs int `yaml:"vvf_settle_ms"`
 }
 
-// NodeAddress is a node's PCEP session address (headends only) and SRv6 address.
+// NodeAddress is a node's PCEP session address (headends only), SRv6 address, and the base URL of
+// the MGMT REST API of its router (VVF nodes, for orchestrator.vvf: mgmt).
 type NodeAddress struct {
 	PCEPPeer string `yaml:"pcep_peer"`
 	Address  string `yaml:"address"`
+	MGMT     string `yaml:"mgmt"`
 }
 
 // Bindings returns the IN / OUT bindings.
@@ -89,9 +99,9 @@ func (o Operator) Bindings() ted.Bindings {
 	return ted.Bindings{Sources: o.Sources, Destinations: o.Destinations, Labels: o.Labels}
 }
 
-// LoadOperator reads the network operator config from a YAML file. srPolicy, when set, overrides
-// orchestrator.sr_policy (CLI / environment).
-func LoadOperator(path string, srPolicy ...string) (Operator, error) {
+// LoadOperator reads the network operator config from a YAML file (Override applies the CLI /
+// environment overrides of the drivers).
+func LoadOperator(path string) (Operator, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return Operator{}, fmt.Errorf("read operator config: %w", err)
@@ -113,9 +123,6 @@ func LoadOperator(path string, srPolicy ...string) (Operator, error) {
 	default:
 		return Operator{}, fmt.Errorf("operator config %s: unknown ted.source %q", path, o.TED.Source)
 	}
-	if len(srPolicy) > 0 && srPolicy[0] != "" {
-		o.Orchestrator.SRPolicy = srPolicy[0]
-	}
 	switch o.Orchestrator.SRPolicy {
 	case "":
 		o.Orchestrator.SRPolicy = DriverDryRun
@@ -127,6 +134,13 @@ func LoadOperator(path string, srPolicy ...string) (Operator, error) {
 	default:
 		return Operator{}, fmt.Errorf("operator config %s: unknown orchestrator.sr_policy %q", path, o.Orchestrator.SRPolicy)
 	}
+	switch o.Orchestrator.VVF {
+	case "":
+		o.Orchestrator.VVF = DriverDryRun
+	case DriverDryRun, DriverMGMT:
+	default:
+		return Operator{}, fmt.Errorf("operator config %s: unknown orchestrator.vvf %q", path, o.Orchestrator.VVF)
+	}
 	for host, a := range o.Orchestrator.Nodes {
 		for _, s := range []string{a.PCEPPeer, a.Address} {
 			if s == "" {
@@ -136,6 +150,35 @@ func LoadOperator(path string, srPolicy ...string) (Operator, error) {
 				return Operator{}, fmt.Errorf("operator config %s: orchestrator.nodes.%s: %w", path, host, err)
 			}
 		}
+		if a.MGMT != "" {
+			if u, err := url.Parse(a.MGMT); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return Operator{}, fmt.Errorf("operator config %s: orchestrator.nodes.%s.mgmt %q is not an http(s) URL", path, host, a.MGMT)
+			}
+		}
 	}
 	return o, nil
+}
+
+// Override applies the CLI / environment overrides of the southbound drivers: srPolicy and vvf
+// replace the config's drivers when set; dryRun sends everything to the dry-run driver.
+func (o *Operator) Override(srPolicy, vvf string, dryRun bool) error {
+	if srPolicy != "" {
+		if srPolicy != DriverDryRun && srPolicy != DriverPolaPCE {
+			return fmt.Errorf("unknown SR Policy driver %q", srPolicy)
+		}
+		if srPolicy == DriverPolaPCE && o.Orchestrator.PolaPCE.Address == "" {
+			return fmt.Errorf("orchestrator.polapce.address is required for the polapce driver")
+		}
+		o.Orchestrator.SRPolicy = srPolicy
+	}
+	if vvf != "" {
+		if vvf != DriverDryRun && vvf != DriverMGMT {
+			return fmt.Errorf("unknown VVF driver %q", vvf)
+		}
+		o.Orchestrator.VVF = vvf
+	}
+	if dryRun {
+		o.Orchestrator.SRPolicy, o.Orchestrator.VVF = DriverDryRun, DriverDryRun
+	}
+	return nil
 }

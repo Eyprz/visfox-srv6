@@ -20,7 +20,7 @@ assures them.
   assurance, each in its own Go package, with the validated intents held as the Single Source of Truth
   (SSoT).
 - **Real control plane.** SR Policies go to [PolaPCE](https://github.com/nttcom/pola) over gRPC and reach
-  the headends over PCEP. The topology (TED) can be learned over BGP-LS from GoBGP and goes through a
+  the headends over PCEP; VVFs, switchers included, are controlled over their routers' REST API. The topology (TED) can be learned over BGP-LS from GoBGP and goes through a
   YANG model (RFC 8345) before the orchestrator sees it.
 - **Seamless switching.** With hot standby every STANDBY input is already fed to the output's
   switchers, so a Take only switches: VVF configs first, then the path, then the switchers, upstream
@@ -79,8 +79,8 @@ Requirements: Docker with Compose.
 docker compose up --build -V
 open http://localhost:15173
 
-# WebUI with the Go IEL (SR Policies are logged, not sent)
-VITE_API_MOCK=false docker compose up --build -V
+# WebUI with the Go IEL, dry run: every southbound instruction is logged, nothing is sent
+VITE_API_MOCK=false VISFOX_DRY_RUN=true docker compose up --build -V
 
 # Local C-Plane lab: PolaPCE, GoBGP, a stand-in BGP-LS speaker and four stand-in headends
 VITE_API_MOCK=false VISFOX_SR_POLICY=polapce docker compose --profile cplane up --build -V
@@ -126,16 +126,41 @@ cd iel && go test -race ./... && golangci-lint run
 cd application && npm run check && npm run lint && npm run test
 ```
 
-## Status
+## Features
 
-VISFOX-SRv6 is under active development (v0.x). Switcher and VVF control are dry-run in this version
-(the SR Policies are real); latency SLAs and telemetry-driven assurance are planned.
+VISFOX-SRv6 is under active development (v0.x). What works today:
+
+| Area | Supported |
+| :--- | :--- |
+| Operation | Crosspoint matrix: assign a preset to a cell, Take (one ON AIR per OUT), stop output, clear; the reasons a cell cannot be taken; releasing STANDBY cells of the same input when its streams run short |
+| Presets | SFC designer with the chain rules served by the IEL (VVF bundles, execution order, video formats); live function parameters (color sliders, crop position controller) |
+| Visibility | Topology overview (live and STANDBY feed links, resource pool usage), real path of a cell with its Segment List, log bar, settings, live sync over SSE; English / Japanese, light / dark |
+| Topology | TED from a static seed or from BGP-LS (GoBGP, read at startup), through a YANG model (RFC 8345); SID interpretation rules for the testbed and for structured RFC 8986 SIDs |
+| Planning | Resource pools (VVF nodes, switcher inputs / outputs, headend streams); ways through cascaded switchers computed as a graph; hot and cold standby |
+| Southbound | SR Policies through PolaPCE (gRPC, PCEP), validated against a TED shared over BGP-LS; switcher input selection over the routers' REST API; a dry-run driver that logs instead of sending |
+| Assurance | Rollback to the last known good config when a change fails; at startup, SR Policies read back from PolaPCE and drift repaired |
+| Quality | A switching test model run on every `go test`: no picture break at any southbound step, refusals checked against an exhaustive allocation oracle |
+| Development | An in-browser mock IEL with the same rules; a local C-Plane lab (PolaPCE, GoBGP, BGP-LS speaker, stand-in headends) |
+
+With limits:
+
+| Area | Limit |
+| :--- | :--- |
+| Presets | The Go IEL serves predefined presets: creating, changing or deleting presets returns `501` (the mock IEL supports them). Parameters can be changed |
+| VVF control | The config API of processing VVFs (caption, color / transcode / crop) is not defined yet: those configs are logged. Switcher control has not been tried on hardware yet |
+| Lab | The stand-in headends accept and report SR Policies but forward no packets |
+| Switching | After an OUT stops its output, its switcher keeps the last input, so a STANDBY feed on that input reaches the OUT. A cold standby Take is not seamless |
+| Topology | BGP-LS is read once at startup; changes are not followed |
+| Branches | Ways through replicating VVFs (RFC 9524) are planned but not rendered |
+
+Not yet:
+
+- Telemetry, latency SLAs and telemetry-driven drift detection (the mock IEL simulates telemetry).
+- Path computation by PolaPCE (dynamic SR Policies with VVFs as waypoints).
+- The designer's resource estimate from the Go IEL (mock only).
+- BGP FlowSpec, a VIM (OpenStack), the channel-strip view and WebSocket transport.
 
 ## License
 
 [Apache License 2.0](LICENSE). The bundled fonts (Play, M PLUS 2) are under the SIL Open Font License,
 and the IETF YANG modules under the license stated in each module.
-
-## Contributors
-
-See [CONTRIBUTORS.md](CONTRIBUTORS.md).

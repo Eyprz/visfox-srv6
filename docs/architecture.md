@@ -30,9 +30,9 @@ A Go service. Every package matches a step of RFC 9315 and hands its result on s
 | Intent ingestion | `internal/ingestion/nbi`, `internal/ingestion/usecase` | HTTP -> use cases; the intent lifecycle (OFF, STANDBY, ON AIR) in the SSoT |
 | Intent translation | `internal/translation` | crosspoint intent -> SFC request (validated chain of SF instances) |
 | Orchestration: plan | `internal/orchestration/plan` | SFC requests -> Service Function Paths (VVF nodes, ways through switchers) |
-| Orchestration: render | `internal/orchestration/render` | SFP -> southbound plan (SR Policies, switcher selections, VVF configs) |
+| Orchestration: render | `internal/orchestration/render` | SFP -> southbound plan (SR Policies, VVF control) |
 | Orchestration: provision | `internal/orchestration/provision` | plan -> drivers, in order, stopping at the first failure |
-| Southbound clients | `internal/sbi` | PolaPCE (gRPC), BGP-LS (GoBGP gRPC), dry run |
+| Southbound clients | `internal/sbi` | PolaPCE (gRPC), VVF control (router REST), BGP-LS (GoBGP gRPC), dry run |
 | Intent assurance | `internal/assurance` | monitor (read back), compliance (compare with the SSoT), report (SSE, logs) |
 | SSoT | `internal/ssot` | presets, intents, TED, the provisioned realization (SQLite) |
 
@@ -130,9 +130,13 @@ more, and a cold standby Take is not seamless.
 
 | Instruction | Driver |
 | :--- | :--- |
-| SR Policy set / delete | PolaPCE (`CreateSRPolicy` / `DeleteSRPolicy`, PCEP to the headends) or dry run |
-| Switcher selection | dry run (switcher driver planned) |
-| VVF config | dry run (VNF manager driver planned) |
+| SR Policy set / delete | `polapce`: PolaPCE (`CreateSRPolicy` / `DeleteSRPolicy`, PCEP to the headends) |
+| VVF control: input selection of a switcher (a `select` VVF) | `mgmt`: the router's REST API (`POST /config/stream_switch`) |
+| VVF control: config of a processing VVF | `mgmt`: not defined yet |
+
+Every instruction kind can also go to the **dry-run** driver, which logs instead of sending: for health
+checks, validation and demos without touching the network (`orchestrator.sr_policy` /
+`orchestrator.vvf: dryrun`, or `VISFOX_DRY_RUN=true` for everything).
 
 The IEL sends explicit Segment Lists of service SIDs (VVF functions, switcher input ports, decap); the IGP
 routes between them. On a network whose TED is shared with PolaPCE over BGP-LS, Pola validates every SID

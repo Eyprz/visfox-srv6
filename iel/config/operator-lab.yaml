@@ -73,6 +73,8 @@ limits:
 # Southbound drivers. The lab needs the cplane profile; dryrun still works.
 orchestrator:
   sr_policy: polapce
+  # VVF control (switcher input selection, VVF configs): the lab has no VVF routers, so it is logged.
+  vvf: dryrun
   polapce:
     address: "172.31.77.2:50052"
     asn: 65000

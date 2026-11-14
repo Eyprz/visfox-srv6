@@ -34,6 +34,11 @@ type Immutable struct {
 	// SRPolicyDriver overrides orchestrator.sr_policy of the network operator config ("dryrun" /
 	// "polapce"); empty keeps the file's.
 	SRPolicyDriver string
+	// VVFDriver overrides orchestrator.vvf ("dryrun" / "mgmt"); empty keeps the file's.
+	VVFDriver string
+	// DryRun sends every southbound instruction to the dry-run driver (health checks, validation,
+	// demos), whatever the network operator config selects.
+	DryRun bool
 }
 
 // Load reads the settings from CLI flags, falling back to VISFOX_* environment variables and defaults.
@@ -51,6 +56,10 @@ func Load(args []string) (Immutable, error) {
 	timeout := fs.String("router-timeout", env("VISFOX_ROUTER_TIMEOUT", "3s"), "southbound request timeout (env VISFOX_ROUTER_TIMEOUT)")
 	srPolicy := fs.String("sr-policy", env("VISFOX_SR_POLICY", ""),
 		"SR Policy driver, dryrun or polapce; overrides the network operator config (env VISFOX_SR_POLICY)")
+	vvf := fs.String("vvf", env("VISFOX_VVF", ""),
+		"VVF control driver, dryrun or mgmt; overrides the network operator config (env VISFOX_VVF)")
+	dryRun := fs.Bool("dry-run", env("VISFOX_DRY_RUN", "") == "true" || env("VISFOX_DRY_RUN", "") == "1",
+		"log every southbound instruction instead of sending it (env VISFOX_DRY_RUN)")
 	if err := fs.Parse(args); err != nil {
 		return Immutable{}, err
 	}
@@ -73,6 +82,8 @@ func Load(args []string) (Immutable, error) {
 		PresetsSeedPath:    *presets,
 		RouterTimeout:      rt,
 		SRPolicyDriver:     *srPolicy,
+		VVFDriver:          *vvf,
+		DryRun:             *dryRun,
 	}, nil
 }
 

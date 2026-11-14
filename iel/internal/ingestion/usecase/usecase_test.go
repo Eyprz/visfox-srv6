@@ -3,10 +3,7 @@ package usecase_test
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -86,14 +83,12 @@ func (n *network) SRPolicies(context.Context) ([]domain.SRPolicy, error) { retur
 
 type fixture struct {
 	// mon, when set, is the monitor the next open uses.
-	mon  *network
-	db   *sql.DB
-	pub  *recorder
-	orch *southbound
-	uc   *usecase.UseCases
-	// predefined serves the seed presets only (no preset editing).
-	predefined bool
-	seedPath   string
+	mon      *network
+	db       *sql.DB
+	pub      *recorder
+	orch     *southbound
+	uc       *usecase.UseCases
+	seedPath string
 	// limits, when set, changes the operator config's limits (e.g. cold standby).
 	limits func(*ssot.Limits)
 	// network selects the shipped network ("" testbed, "rich": config/operator-rich.yaml, db/ted-rich.yaml).
@@ -102,22 +97,17 @@ type fixture struct {
 
 // newFixture builds the use cases from the shipped operator config, TED seed, catalog and presets,
 // with preset editing (stage C).
-func newFixture(t *testing.T) *fixture { return newFixtureWith(t, false, "../../../db/presets.yaml") }
+func newFixture(t *testing.T) *fixture { return (&fixture{}).init(t, "../../../db/presets.yaml") }
 
 // newColdFixture is newFixture in cold standby: STANDBY holds only VVF nodes, the Take sets up the
 // whole path (an environment whose switchers need no feed).
 func newColdFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{limits: func(l *ssot.Limits) { l.StandbyFeed = ssot.StandbyFeedNone }}
-	return f.init(t, false, "../../../db/presets.yaml")
+	return f.init(t, "../../../db/presets.yaml")
 }
 
-func newFixtureWith(t *testing.T, predefined bool, seedPath string) *fixture {
-	t.Helper()
-	return (&fixture{}).init(t, predefined, seedPath)
-}
-
-func (f *fixture) init(t *testing.T, predefined bool, seedPath string) *fixture {
+func (f *fixture) init(t *testing.T, seedPath string) *fixture {
 	t.Helper()
 	ctx := context.Background()
 	conn, err := sql.Open("sqlite", "file:"+t.TempDir()+"/visfox.db?_pragma=foreign_keys(1)")
@@ -128,7 +118,7 @@ func (f *fixture) init(t *testing.T, predefined bool, seedPath string) *fixture 
 	if _, err := conn.ExecContext(ctx, db.Schema); err != nil {
 		t.Fatal(err)
 	}
-	f.db, f.pub, f.orch, f.predefined, f.seedPath = conn, &recorder{}, &southbound{}, predefined, seedPath
+	f.db, f.pub, f.orch, f.seedPath = conn, &recorder{}, &southbound{}, seedPath
 	f.uc = f.open(t)
 	return f
 }
@@ -165,11 +155,7 @@ func (f *fixture) open(t *testing.T) *usecase.UseCases {
 		t.Fatal(err)
 	}
 	st := ssot.NewStore(f.db)
-	if f.predefined {
-		_, err = st.SyncPresets(ctx, seed, time.Now())
-	} else {
-		_, err = st.SeedPresets(ctx, seed, time.Now())
-	}
+	_, err = st.SeedPresets(ctx, seed, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +164,7 @@ func (f *fixture) open(t *testing.T) *usecase.UseCases {
 		mon.Monitor = f.mon
 	}
 	uc, err := usecase.New(ctx, usecase.Options{
-		Store: st, Resources: res, Catalog: cat, Publisher: f.pub, PresetEditing: !f.predefined,
+		Store: st, Resources: res, Catalog: cat, Publisher: f.pub,
 		Provisioner: f.orch, Monitor: mon.Monitor, Arg: op.SIDRule.Arg,
 		DefaultConfig: apitypes.DynamicConfig{SseIntervalMs: 1000, MetricsDumpIntervalS: 30, LogLevel: apitypes.LogLevelInfo},
 	})
@@ -443,62 +429,6 @@ func TestPatchConfig(t *testing.T) {
 	}
 	if got := f.open(t).GetConfig.Run().Dynamic.LogLevel; got != warn {
 		t.Fatalf("log level after restart = %s", got)
-	}
-}
-
-func TestPredefinedPresets(t *testing.T) {
-	ctx := context.Background()
-	f := newFixtureWith(t, true, "../../../db/presets.yaml")
-	p, err := f.uc.GetPresetByID.Run("preset-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Writes answer 501; parameter changes and assignment work.
-	in := apitypes.PresetInput{Name: p.Name, Chain: p.Chain}
-	if _, err := f.uc.CreatePreset.Run(ctx, in); code(t, err) != apitypes.ErrorCodeNOTIMPLEMENTED {
-		t.Fatalf("create = %v", err)
-	}
-	if _, err := f.uc.UpdatePreset.Run(ctx, p.Id, in); code(t, err) != apitypes.ErrorCodeNOTIMPLEMENTED {
-		t.Fatalf("update = %v", err)
-	}
-	if err := f.uc.DeletePreset.Run(ctx, p.Id); code(t, err) != apitypes.ErrorCodeNOTIMPLEMENTED {
-		t.Fatalf("delete = %v", err)
-	}
-	if _, err := f.uc.ApplyPresetToCell.Run(ctx, "IN1-OUT1", p.Id, nil); err != nil {
-		t.Fatal(err)
-	}
-	fn := p.Chain[0]
-	if _, err := f.uc.PatchPresetFunctionParams.Run(ctx, p.Id, fn.InstanceId, fn.Params); err != nil {
-		t.Fatal(err)
-	}
-
-	// The seed file replaces the stored presets at the next start: a preset that left the file is
-	// deleted and its cells turn OFF.
-	seed, err := ssot.LoadPresetSeed("../../../db/presets.yaml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	seed.Presets = slices.DeleteFunc(seed.Presets, func(x apitypes.Preset) bool { return x.Id == p.Id })
-	seed.Layouts = slices.DeleteFunc(seed.Layouts, func(x apitypes.PresetLayout) bool { return x.PresetId == p.Id })
-	path := filepath.Join(t.TempDir(), "presets.yaml")
-	raw, err := json.Marshal(seed) // JSON is YAML
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, raw, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	f.seedPath = path
-	uc := f.open(t)
-	if _, err := uc.GetPresetByID.Run(p.Id); code(t, err) != apitypes.ErrorCodeRESOURCENOTFOUND {
-		t.Fatalf("removed preset = %v", err)
-	}
-	if got := state(t, uc, "IN1-OUT1"); got != apitypes.ExecutionStateOff {
-		t.Fatalf("cell of a removed preset = %s", got)
-	}
-	if n := len(uc.GetPresets.Run()); n != len(seed.Presets) {
-		t.Fatalf("presets = %d, want %d", n, len(seed.Presets))
 	}
 }
 
@@ -982,7 +912,7 @@ func TestHotStandbySwitcherTrees(t *testing.T) {
 // every IN in STANDBY and put the same IN on air at once; no release is ever needed.
 func TestRichNetwork(t *testing.T) {
 	ctx := context.Background()
-	f := (&fixture{network: "rich"}).init(t, false, "../../../db/presets.yaml")
+	f := (&fixture{network: "rich"}).init(t, "../../../db/presets.yaml")
 	for _, out := range []string{"OUT1", "OUT2", "OUT3", "OUT4"} {
 		for _, in := range []string{"IN1", "IN2", "IN3", "IN4"} {
 			if _, err := f.uc.ApplyPresetToCell.Run(ctx, in+"-"+out, "preset-2", nil); err != nil {

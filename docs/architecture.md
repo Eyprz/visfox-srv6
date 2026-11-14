@@ -131,8 +131,12 @@ more, and a cold standby Take is not seamless.
 | Instruction | Driver |
 | :--- | :--- |
 | SR Policy set / delete | `polapce`: PolaPCE (`CreateSRPolicy` / `DeleteSRPolicy`, PCEP to the headends) |
-| VVF control: input selection of a switcher (a `select` VVF) | `mgmt`: the router's REST API (`POST /config/stream_switch`) |
+| VVF control: input selection of a switcher VVF (`select`) | `mgmt`: the router's REST API (`POST /config/stream_switch`), provisionally |
 | VVF control: config of a processing VVF | `mgmt`: not defined yet |
+
+VVF control has no proper M-plane yet: no component manages the SR functions, so the `mgmt` driver
+provisionally uses the REST API of the routers the VVFs run on. It moves to that component (a VNF
+manager or VIM) once one exists.
 
 Every instruction kind can also go to the **dry-run** driver, which logs instead of sending: for health
 checks, validation and demos without touching the network (`orchestrator.sr_policy` /

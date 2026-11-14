@@ -1,7 +1,7 @@
-// Package vvf is the VVF control client of the SFC Provisioner. While no VNF Manager (VIM) exists,
-// it controls the VVFs over the MGMT REST API of the routers they run on (the API of the testbed
-// routers, as D4S used it): the input a select VVF (switcher) sends on, and the function configs of
-// process VVFs.
+// Package vvf is the VVF control client of the SFC Provisioner: the input a switcher VVF (select)
+// sends on, and the function configs of process VVFs. No M-plane component manages the SR functions
+// yet, so it provisionally treats the MGMT REST API of the routers the VVFs run on (the testbed
+// router API, as D4S used it) as the M-plane; it moves to that component once one exists.
 package vvf
 
 import (

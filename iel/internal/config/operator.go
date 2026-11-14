@@ -55,7 +55,8 @@ const (
 	DriverDryRun = "dryrun"
 	// DriverPolaPCE sends SR Policies to PolaPCE (gRPC -> PCEP -> headends).
 	DriverPolaPCE = "polapce"
-	// DriverMGMT controls the VVFs over their routers' MGMT REST API (internal/sbi/vvf).
+	// DriverMGMT controls the VVFs over their routers' MGMT REST API, a provisional M-plane until a
+	// component manages the SR functions (internal/sbi/vvf).
 	DriverMGMT = "mgmt"
 )
 

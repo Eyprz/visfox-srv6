@@ -63,7 +63,7 @@ func newServer(t *testing.T) (*echo.Echo, *report.Broker) {
 		t.Fatal(err)
 	}
 	st := ssot.NewStore(conn)
-	if _, err := st.SyncPresets(ctx, seed, time.Now()); err != nil {
+	if _, err := st.SeedPresets(ctx, seed, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	hub := report.NewBroker(logger)
@@ -173,20 +173,22 @@ func TestAssignAndTake(t *testing.T) {
 	}
 }
 
-// The shipped IEL serves the predefined presets: preset writes answer 501 NOT_IMPLEMENTED.
-func TestPresetWritesNotImplemented(t *testing.T) {
+// Presets can be created, changed and deleted through the API.
+func TestPresetWrites(t *testing.T) {
 	e, _ := newServer(t)
-	body := `{"name":"Spare","chain":[{"instance_id":"a","type":"color","params":{"r":0,"g":0,"b":0}}]}`
-	for _, c := range []struct{ method, path, body string }{
-		{http.MethodPost, "/presets", body},
-		{http.MethodPut, "/presets/preset-1", body},
-		{http.MethodDelete, "/presets/preset-1", ""},
-	} {
-		rec := call(t, e, c.method, c.path, c.body)
-		if rec.Code != http.StatusNotImplemented ||
-			decodeBody[apitypes.ErrorResponse](t, rec).Code != apitypes.ErrorCodeNOTIMPLEMENTED {
-			t.Fatalf("%s %s = %d %s", c.method, c.path, rec.Code, rec.Body.String())
-		}
+	body := `{"name":"Spare","chain":[{"instance_id":"sf-transcode-1","type":"transcode","params":{}},` +
+		`{"instance_id":"sf-crop-1","type":"crop","params":{"x":0,"y":0}},` +
+		`{"instance_id":"sf-color-1","type":"color","params":{"r":0,"g":0,"b":0}}]}`
+	rec := call(t, e, http.MethodPost, "/presets", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+	}
+	id := decodeBody[apitypes.Preset](t, rec).Id
+	if rec = call(t, e, http.MethodPut, "/presets/"+id, strings.Replace(body, "Spare", "Spare 2", 1)); rec.Code != http.StatusOK {
+		t.Fatalf("update = %d %s", rec.Code, rec.Body.String())
+	}
+	if rec = call(t, e, http.MethodDelete, "/presets/"+id, ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body.String())
 	}
 }
 

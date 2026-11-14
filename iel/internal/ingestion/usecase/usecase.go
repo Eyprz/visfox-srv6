@@ -56,10 +56,6 @@ type Options struct {
 	Arg string
 	// ColorBase is the base of the SR Policy colors (one color per OUT).
 	ColorBase uint32
-	// PresetEditing enables creating, changing and deleting presets (POST / PUT / DELETE /presets).
-	// Without it the IEL serves the predefined presets only and answers 501 NOT_IMPLEMENTED
-	// parameter changes stay available.
-	PresetEditing bool
 	// OnLogLevel is called with the log level at startup and whenever it changes.
 	OnLogLevel func(apitypes.LogLevel)
 	// Now returns the current time (tests); defaults to time.Now.
@@ -79,7 +75,6 @@ type env struct {
 	oplog     *report.Log
 	monitor   monitor.SRPolicySource
 	immutable apitypes.ImmutableConfig
-	editing   bool
 	onLevel   func(apitypes.LogLevel)
 	now       func() time.Time
 
@@ -143,7 +138,7 @@ func New(ctx context.Context, o Options) (*UseCases, error) {
 		store: o.Store, res: o.Resources, cat: cat, tr: translation.Translator{Catalog: cat},
 		orch: orchestration.New(orchestration.Options{Resources: o.Resources, SwitcherRequired: required,
 			Arg: o.Arg, ColorBase: o.ColorBase, Provisioner: o.Provisioner}),
-		pub: o.Publisher, monitor: o.Monitor, immutable: o.Immutable, editing: o.PresetEditing, onLevel: o.OnLogLevel, now: o.Now,
+		pub: o.Publisher, monitor: o.Monitor, immutable: o.Immutable, onLevel: o.OnLogLevel, now: o.Now,
 		layouts: map[string]apitypes.PresetLayout{}, cells: map[string]*ssot.ActiveIntent{}, published: map[string]string{},
 		config: o.DefaultConfig,
 	}
@@ -159,10 +154,6 @@ func New(ctx context.Context, o Options) (*UseCases, error) {
 		return nil, fmt.Errorf("load presets: %w", err)
 	}
 	for i := range presets {
-		// Predefined presets cannot be fixed through the API: reject a broken file at startup.
-		if issues, _ := s.tr.CheckChain(presets[i].Chain); !s.editing && len(issues) > 0 {
-			return nil, fmt.Errorf("predefined preset %s: %s", presets[i].Id, issues[0].Message)
-		}
 		s.presets = append(s.presets, &presets[i])
 	}
 	layouts, err := s.store.Layouts(ctx)

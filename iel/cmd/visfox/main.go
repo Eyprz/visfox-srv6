@@ -98,23 +98,11 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	// Until intent translation (stage C) presets are predefined: the seed file is the source and
-	// replaces the stored presets at every start; the API answers preset writes with 501.
-	// Stage C sets presetEditing and seeds the first start only.
-	const presetEditing = false
-	if presetEditing {
-		if seeded, err := st.SeedPresets(ctx, seed, time.Now().UTC()); err != nil {
-			return fmt.Errorf("seed presets: %w", err)
-		} else if seeded {
-			logger.Info("presets seeded", "source", cfg.PresetsSeedPath, "presets", len(seed.Presets))
-		}
-	} else {
-		removed, err := st.SyncPresets(ctx, seed, time.Now().UTC())
-		if err != nil {
-			return fmt.Errorf("load predefined presets: %w", err)
-		}
-		logger.Info("predefined presets loaded", "source", cfg.PresetsSeedPath, "presets", len(seed.Presets),
-			"removed", removed)
+	// The seed presets go in on the first start only; afterwards presets are managed through the API.
+	if seeded, err := st.SeedPresets(ctx, seed, time.Now().UTC()); err != nil {
+		return fmt.Errorf("seed presets: %w", err)
+	} else if seeded {
+		logger.Info("presets seeded", "source", cfg.PresetsSeedPath, "presets", len(seed.Presets))
 	}
 
 	prov, mon, closeSBI, err := newProvisioner(op.Orchestrator, res, cfg.RouterTimeout, logger)
@@ -126,7 +114,7 @@ func run() error {
 	events := report.NewBroker(logger)
 	go events.RunHeartbeat(ctx)
 	uc, err := usecase.New(ctx, usecase.Options{
-		Store: st, Resources: res, Catalog: catalog, Publisher: events, Logger: logger, PresetEditing: presetEditing,
+		Store: st, Resources: res, Catalog: catalog, Publisher: events, Logger: logger,
 		Provisioner: prov, Monitor: mon, Arg: op.SIDRule.Arg, ColorBase: op.Orchestrator.ColorBase,
 		Immutable: apitypes.ImmutableConfig{
 			ListenAddr: cfg.ListenAddr, DbPath: cfg.DBPath, RouterTimeoutMs: int(cfg.RouterTimeout.Milliseconds()),

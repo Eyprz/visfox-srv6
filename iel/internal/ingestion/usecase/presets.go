@@ -111,11 +111,6 @@ func (s *env) nextPresetID() string {
 	return "preset-" + strconv.Itoa(n+1)
 }
 
-// errEditing answers preset writes while the IEL serves the predefined presets only.
-var errEditing = &domain.Error{Code: apitypes.ErrorCodeNOTIMPLEMENTED,
-	Message: "Preset editing is not implemented yet: this IEL serves the predefined presets " +
-		"(iel/db/presets.yaml) until intent translation (stage C). Parameter changes are available."}
-
 // CreatePreset saves a new preset after checking its chain.
 // It is createPreset in api/openapi.yaml.
 type CreatePreset struct{ env *env }
@@ -123,9 +118,6 @@ type CreatePreset struct{ env *env }
 // Run runs the use case.
 func (u CreatePreset) Run(ctx context.Context, in apitypes.PresetInput) (apitypes.Preset, error) {
 	s := u.env
-	if !s.editing {
-		return apitypes.Preset{}, errEditing
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if issues, _ := s.tr.CheckChain(in.Chain); len(issues) > 0 {
@@ -166,9 +158,6 @@ type UpdatePreset struct{ env *env }
 // Run runs the use case.
 func (u UpdatePreset) Run(ctx context.Context, id string, in apitypes.PresetInput) (apitypes.Preset, error) {
 	s := u.env
-	if !s.editing {
-		return apitypes.Preset{}, errEditing
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := s.preset(id)
@@ -219,9 +208,6 @@ type DeletePreset struct{ env *env }
 // Run runs the use case.
 func (u DeletePreset) Run(ctx context.Context, id string) error {
 	s := u.env
-	if !s.editing {
-		return errEditing
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	p := s.preset(id)

@@ -113,8 +113,7 @@ export interface paths {
          * @description The IEL assigns `id`. `chain[].instance_id` is a logical node id unique within the preset and equals the
          *     `node_id` of the SVoT layout (assigned by the UI).
          *     Runs the same validation as `POST /presets/validate` before saving; a violation returns 422 `INVALID_CHAIN`.
-         *     An IEL without preset editing returns 501 `NOT_IMPLEMENTED`; it serves predefined presets only,
-         *     and their parameters can still be changed with `PATCH /presets/{presetId}/functions/{instanceId}`.
+         *     An IEL that does not manage presets returns 501 `NOT_IMPLEMENTED`.
          */
         post: operations["createPreset"];
         delete?: never;
@@ -188,8 +187,7 @@ export interface paths {
          *     - Parameters change live with `PATCH /presets/{presetId}/functions/{instanceId}`. Parameters in this update that
          *         differ from the current values are also applied live to the cells using the preset (on failure: LKG rollback and 502 / 504).
          *         Only ON AIR cells push them to the VVF nodes; STANDBY cells push them at the next Take.
-         *     An IEL without preset editing returns 501 `NOT_IMPLEMENTED`; it serves predefined presets only,
-         *     and their parameters can still be changed with `PATCH /presets/{presetId}/functions/{instanceId}`.
+         *     An IEL that does not manage presets returns 501 `NOT_IMPLEMENTED`.
          */
         put: operations["updatePreset"];
         post?: never;
@@ -197,8 +195,7 @@ export interface paths {
          * Delete a preset
          * @description A preset applied to any cell cannot be deleted (409 `PRESET_IN_USE`, `details.cell_ids` lists the cells using it).
          *     Its SVoT layout is deleted with it.
-         *     An IEL without preset editing returns 501 `NOT_IMPLEMENTED`; it serves predefined presets only,
-         *     and their parameters can still be changed with `PATCH /presets/{presetId}/functions/{instanceId}`.
+         *     An IEL that does not manage presets returns 501 `NOT_IMPLEMENTED`.
          */
         delete: operations["deletePreset"];
         options?: never;
@@ -1748,7 +1745,7 @@ export interface components {
          *     - ROUTER_ERROR (502): a router MGMT API returned an error
          *     - ROUTER_TIMEOUT (504): a router MGMT API timed out
          *     - INTERNAL_ERROR (500): internal IEL error
-         *     - NOT_IMPLEMENTED (501): an operation this IEL does not support (e.g. creating, changing or deleting presets without preset editing).
+         *     - NOT_IMPLEMENTED (501): an operation this IEL does not support (e.g. preset writes on an IEL that does not manage presets).
          *         The UI marks the operation as unsupported and shows `message`
          * @example INVALID_CELL_STATE
          * @enum {string}

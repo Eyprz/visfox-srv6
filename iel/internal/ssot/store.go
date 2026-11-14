@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"time"
 
 	apitypes "github.com/eyprz/visfox-srv6/api/generated/go"
@@ -74,72 +73,6 @@ func (s *Store) SeedPresets(ctx context.Context, seed *PresetSeed, now time.Time
 		}
 	}
 	return true, s.putMeta(ctx, keyPresetsSeeded, now.Format(time.RFC3339))
-}
-
-// SyncPresets makes the stored presets and their layouts equal to the seed, the predefined presets:
-// it adds or updates the seed presets (updated_at changes only when a
-// preset differs), deletes the others and turns the cells that used them OFF. It returns the ids of
-// the deleted presets.
-func (s *Store) SyncPresets(ctx context.Context, seed *PresetSeed, now time.Time) ([]string, error) {
-	stored, err := s.Presets(ctx)
-	if err != nil {
-		return nil, err
-	}
-	old := map[string]apitypes.Preset{}
-	for _, p := range stored {
-		old[p.Id] = p
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	for _, p := range seed.Presets {
-		p.CreatedAt, p.UpdatedAt = &now, &now
-		if o, ok := old[p.Id]; ok {
-			p.CreatedAt, p.UpdatedAt = o.CreatedAt, o.UpdatedAt
-			if !samePreset(o, p) {
-				p.UpdatedAt = &now
-			}
-			delete(old, p.Id)
-		}
-		if err := putPreset(ctx, tx, p); err != nil {
-			return nil, err
-		}
-	}
-	removed := []string{}
-	for id := range old {
-		if _, err := tx.ExecContext(ctx, `UPDATE matrix_cells SET preset_id = NULL, execution_state = ?,
-			health_state = NULL, updated_at = ? WHERE preset_id = ?`,
-			string(apitypes.ExecutionStateOff), formatTime(now), id); err != nil {
-			return nil, err
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM presets WHERE id = ?`, id); err != nil {
-			return nil, err
-		}
-		removed = append(removed, id)
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM preset_layouts`); err != nil {
-		return nil, err
-	}
-	for _, l := range seed.Layouts {
-		if err := putLayout(ctx, tx, l); err != nil {
-			return nil, err
-		}
-	}
-	if err := putMeta(ctx, tx, keyPresetsSeeded, now.Format(time.RFC3339)); err != nil {
-		return nil, err
-	}
-	sort.Strings(removed)
-	return removed, tx.Commit()
-}
-
-// samePreset reports whether two presets have the same name, description, chain and SLA.
-func samePreset(a, b apitypes.Preset) bool {
-	a.CreatedAt, a.UpdatedAt, b.CreatedAt, b.UpdatedAt = nil, nil, nil, nil
-	ja, errA := json.Marshal(a)
-	jb, errB := json.Marshal(b)
-	return errA == nil && errB == nil && string(ja) == string(jb)
 }
 
 // Presets returns every preset in creation order.

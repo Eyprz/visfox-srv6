@@ -790,7 +790,7 @@ func (s *switching) checkState(o switchOp) {
 func flowFixture(t *testing.T, network string) *fixture {
 	t.Helper()
 	f := &fixture{network: network, limits: func(l *ssot.Limits) { l.VVFStreams = nil }}
-	return f.init(t, false, presetsFor(network))
+	return f.init(t, presetsFor(network))
 }
 
 func presetsFor(network string) string {

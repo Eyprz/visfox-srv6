@@ -20,11 +20,8 @@ assures them.
   assurance, each in its own Go package, with the validated intents held as the Single Source of Truth
   (SSoT).
 - **Real control plane.** SR Policies go to [PolaPCE](https://github.com/nttcom/pola) over gRPC and reach
-  the headends over PCEP; VVFs, switchers included, are controlled over their routers' REST API. The topology (TED) can be learned over BGP-LS from GoBGP and goes through a
+  the headends over PCEP. The topology (TED) can be learned over BGP-LS from GoBGP and goes through a
   YANG model (RFC 8345) before the orchestrator sees it.
-- **Seamless switching.** With hot standby every STANDBY input is already fed to the output's
-  switchers, so a Take only switches: VVF configs first, then the path, then the switchers, upstream
-  first (make-before-break). The on-air picture is never re-wired.
 - **Resources as pools.** VVF nodes, switcher inputs / outputs and headend unicasts are uniform resource
   pools; a shortage is always the same kind of issue, and the IEL proposes which STANDBY cells to release.
 - **Self-healing.** A failed change rolls back to the last known good config (LKG); at startup the IEL
@@ -133,11 +130,11 @@ VISFOX-SRv6 is under active development (v0.x). What works today:
 | Area | Supported |
 | :--- | :--- |
 | Operation | Crosspoint matrix: assign a preset to a cell, Take (one ON AIR per OUT), stop output, clear; the reasons a cell cannot be taken; releasing STANDBY cells of the same input when its streams run short |
-| Presets | SFC designer with the chain rules served by the IEL (VVF bundles, execution order, video formats); live function parameters (color sliders, crop position controller) |
+| Presets | SFC designer with the chain rules served by the IEL (VVF bundles, execution order, video formats); presets created, changed and deleted through the API and translated into paths on every assignment; live function parameters (color sliders, crop position controller) |
 | Visibility | Topology overview (live and STANDBY feed links, resource pool usage), real path of a cell with its Segment List, log bar, settings, live sync over SSE; English / Japanese, light / dark |
 | Topology | TED from a static seed or from BGP-LS (GoBGP, read at startup), through a YANG model (RFC 8345); SID interpretation rules for the testbed and for structured RFC 8986 SIDs |
 | Planning | Resource pools (VVF nodes, switcher inputs / outputs, headend streams); ways through cascaded switchers computed as a graph; hot and cold standby |
-| Southbound | SR Policies through PolaPCE (gRPC, PCEP), validated against a TED shared over BGP-LS; switcher input selection over the routers' REST API; a dry-run driver that logs instead of sending |
+| Southbound | SR Policies through PolaPCE (gRPC, PCEP), validated against a TED shared over BGP-LS; a dry-run driver that logs instead of sending |
 | Assurance | Rollback to the last known good config when a change fails; at startup, SR Policies read back from PolaPCE and drift repaired |
 | Quality | A switching test model run on every `go test`: no picture break at any southbound step, refusals checked against an exhaustive allocation oracle |
 | Development | An in-browser mock IEL with the same rules; a local C-Plane lab (PolaPCE, GoBGP, BGP-LS speaker, stand-in headends) |
@@ -146,8 +143,7 @@ With limits:
 
 | Area | Limit |
 | :--- | :--- |
-| Presets | The Go IEL serves predefined presets: creating, changing or deleting presets returns `501` (the mock IEL supports them). Parameters can be changed |
-| VVF control | The config API of processing VVFs (caption, color / transcode / crop) is not defined yet: those configs are logged. Switcher control has not been tried on hardware yet |
+| VVF control | There is no M-plane component that manages the SR functions yet, so the IEL provisionally treats the REST API of the routers the VVFs run on as the M-plane. It selects the input of a switcher VVF that way (not tried on hardware yet); the config API of processing VVFs (caption, color / transcode / crop) is not defined, so those configs are logged |
 | Lab | The stand-in headends accept and report SR Policies but forward no packets |
 | Switching | After an OUT stops its output, its switcher keeps the last input, so a STANDBY feed on that input reaches the OUT. A cold standby Take is not seamless |
 | Topology | BGP-LS is read once at startup; changes are not followed |

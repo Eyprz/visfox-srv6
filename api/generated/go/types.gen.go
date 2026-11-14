@@ -952,7 +952,7 @@ type DynamicConfigPatch struct {
 //   - ROUTER_ERROR (502): a router MGMT API returned an error
 //   - ROUTER_TIMEOUT (504): a router MGMT API timed out
 //   - INTERNAL_ERROR (500): internal IEL error
-//   - NOT_IMPLEMENTED (501): an operation this IEL does not support (e.g. creating, changing or deleting presets without preset editing).
+//   - NOT_IMPLEMENTED (501): an operation this IEL does not support (e.g. preset writes on an IEL that does not manage presets).
 //     The UI marks the operation as unsupported and shows `message`
 //
 // Example: INVALID_CELL_STATE
@@ -971,7 +971,7 @@ type ErrorResponse struct {
 	// - ROUTER_ERROR (502): a router MGMT API returned an error
 	// - ROUTER_TIMEOUT (504): a router MGMT API timed out
 	// - INTERNAL_ERROR (500): internal IEL error
-	// - NOT_IMPLEMENTED (501): an operation this IEL does not support (e.g. creating, changing or deleting presets without preset editing).
+	// - NOT_IMPLEMENTED (501): an operation this IEL does not support (e.g. preset writes on an IEL that does not manage presets).
 	//     The UI marks the operation as unsupported and shows `message`
 	//
 	//

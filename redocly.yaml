@@ -1,0 +1,6 @@
+extends:
+  - recommended
+
+rules:
+  # Parameterless list GETs and the SSE stream have no meaningful 4xx response.
+  operation-4xx-response: off

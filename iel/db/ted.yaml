@@ -1,0 +1,34 @@
+# Static TED source for v1: the shape BGP-LS will deliver in v2 (node name, router id, SIDs
+# without the argument). The IEL converts it to the YANG model (ietf-network + visfox-srv6-ted),
+# validates it, and derives roles / ids / switcher inputs with the SID interpretation rule in
+# config/operator.yaml.
+#
+# Same composition as the WebUI mock (application/src/mocks/seed.ts), written with the testbed
+# convention fd77:XY:: (X: node group, Y: stream or switcher input port).
+nodes:
+  # Headends (encap). They advertise no SIDs; the operator config binds IN 1-4 to them.
+  - { name: 100G-8KDG-Encap-A, router_id: 10.255.0.1 }
+  - { name: 100G-8KDG-Encap-B, router_id: 10.255.0.2 }
+  - { name: 100G-8KDG-Encap-C, router_id: 10.255.0.3 }
+  - { name: 100G-8KDG-Encap-D, router_id: 10.255.0.4 }
+
+  # Switchers: one SID per input. SW1 inputs a-d come from the headends, e from SW2.
+  - name: 100G-8KDG-Switcher-1
+    router_id: 10.255.1.1
+    sids: ["fd77:aa::", "fd77:ab::", "fd77:ac::", "fd77:ad::", "fd77:ae::"]
+  - name: 100G-8KDG-Switcher-2
+    router_id: 10.255.1.2
+    sids: ["fd77:da::", "fd77:db::", "fd77:dc::", "fd77:dd::"]
+
+  # Caption VVFs (8K DG only).
+  - { name: 100G-8KDG-Caption-1, router_id: 10.255.2.1, sids: ["fd77:ba::"] }
+  - { name: 100G-8KDG-Caption-2, router_id: 10.255.2.2, sids: ["fd77:bb::"] }
+  - { name: 100G-8KDG-Caption-3, router_id: 10.255.2.3, sids: ["fd77:bc::"] }
+
+  # Color / Transcode / Crop VVFs (converter, 1 stream each).
+  - { name: 100G-8KDG-Converter-1, router_id: 10.255.3.1, sids: ["fd77:ca::"] }
+  - { name: 100G-8KDG-Converter-2, router_id: 10.255.3.2, sids: ["fd77:cb::"] }
+  - { name: 100G-8KDG-Converter-3, router_id: 10.255.3.3, sids: ["fd77:cc::"] }
+
+  # Decap (egress).
+  - { name: 100G-8KDG-Decap, router_id: 10.255.4.1, sids: ["fd77:ff::"] }

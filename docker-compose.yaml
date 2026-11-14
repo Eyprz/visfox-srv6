@@ -1,0 +1,177 @@
+# VISFOX-SRv6 development environment
+#
+#   docker compose up --build -V
+#   open http://localhost:15173   (WebUI and /api on the same port via visfox_nginx)
+#
+# The WebUI uses the in-browser MSW mock IEL by default. To talk to the Go IEL (visfox_iel):
+#   VITE_API_MOCK=false docker compose up --build -V
+#
+# -V (--renew-anon-volumes) recreates the node_modules volume after package.json changes.
+#
+# Local C-Plane lab (profile cplane, infra/cplane): PolaPCE, GoBGP and four stand-in headends
+# (PCEP PCCs). The IEL sends SR Policies to Pola with VISFOX_SR_POLICY=polapce:
+#   VITE_API_MOCK=false VISFOX_SR_POLICY=polapce docker compose --profile cplane up --build -V
+#   docker compose exec visfox_headend_a wget -qO- localhost:8080/policies
+
+services:
+  visfox_nginx:
+    image: nginx:1.29-alpine
+    ports:
+      - "${VISFOX_HTTP_PORT:-15173}:80"
+    environment:
+      VISFOX_WEBAPP_UPSTREAM: http://visfox_webapp:5173
+      # IEL REST/SSE upstream. Not used while the MSW mock is enabled (VITE_API_MOCK=true).
+      VISFOX_API_UPSTREAM: ${VISFOX_API_UPSTREAM:-http://visfox_iel:8080}
+    volumes:
+      - ./infra/nginx/templates:/etc/nginx/templates:ro
+    depends_on:
+      - visfox_webapp
+      - visfox_iel
+    restart: unless-stopped
+
+  visfox_webapp:
+    build:
+      context: ./application
+    expose:
+      - "5173"
+    environment:
+      # true: serve /api/v1 from the in-browser MSW mock IEL (application/src/mocks).
+      # false: requests go to /api on the same origin and visfox_nginx forwards them to VISFOX_API_UPSTREAM.
+      VITE_API_MOCK: ${VITE_API_MOCK:-true}
+    volumes:
+      - ./application:/app
+      # Keep the container's node_modules (installed by the image) instead of the host's.
+      - /app/node_modules
+      # OpenAPI spec and generated types (npm run codegen / src/lib/api.ts).
+      - ./api:/api
+    restart: unless-stopped
+
+  visfox_iel:
+    build:
+      context: ./iel
+    expose:
+      - "8080"
+    environment:
+      VISFOX_LISTEN: ":8080"
+      VISFOX_LOG_LEVEL: ${VISFOX_LOG_LEVEL:-info}
+      # SR Policy driver: dryrun (log only) or polapce (needs the cplane profile).
+      VISFOX_SR_POLICY: ${VISFOX_SR_POLICY:-dryrun}
+      # Network the IEL runs on: unset = the testbed (db/ted.yaml, config/operator.yaml), rich = plenty
+      # of VVF resources (db/ted-rich.yaml, config/operator-rich.yaml), lab = the TED from BGP-LS
+      # (cplane profile; config/operator-lab.yaml, db/ted-lab.yaml is what visfox_bgpls advertises).
+      # Each network keeps its own SSoT and presets (node ids differ).
+      VISFOX_TED_SEED: db/ted${VISFOX_NETWORK:+-${VISFOX_NETWORK}}.yaml
+      VISFOX_OPERATOR_CONFIG: config/operator${VISFOX_NETWORK:+-${VISFOX_NETWORK}}.yaml
+      VISFOX_DB_PATH: data/visfox${VISFOX_NETWORK:+-${VISFOX_NETWORK}}.db
+      VISFOX_PRESETS_SEED: db/presets${VISFOX_NETWORK:+-${VISFOX_NETWORK}}.yaml
+    volumes:
+      - ./iel:/app
+      # OpenAPI spec (api/openapi.yaml) for contract tests and code generation.
+      - ./api:/api:ro
+      - visfox_go_cache:/root/.cache/go-build
+      - visfox_go_mod:/go/pkg/mod
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/v1/healthz"]
+      interval: 10s
+      timeout: 3s
+      start_period: 60s
+    networks:
+      - default
+      - visfox_cplane
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------- local C-Plane lab (cplane)
+  visfox_polad:
+    profiles: [cplane]
+    image: ghcr.io/nttcom/pola:v1.4.0
+    volumes:
+      - ./infra/cplane/polad.yaml:/pola/polad.yaml:ro
+    networks:
+      visfox_cplane:
+        ipv4_address: 172.31.77.2
+    depends_on:
+      - visfox_gobgpd
+    restart: unless-stopped
+
+  visfox_gobgpd:
+    profiles: [cplane]
+    build:
+      context: ./infra/cplane/gobgp
+    volumes:
+      - ./infra/cplane/gobgp/gobgpd.yaml:/etc/gobgp/gobgpd.yaml:ro
+    networks:
+      visfox_cplane:
+        ipv4_address: 172.31.77.3
+    restart: unless-stopped
+
+  # Stand-in BGP-LS speaker: advertises the lab network's TED (iel/db/ted-lab.yaml) to GoBGP over
+  # iBGP, where PolaPCE and the IEL (VISFOX_NETWORK=lab) learn it.
+  visfox_bgpls:
+    profiles: [cplane]
+    build:
+      context: ./infra/cplane/fakebgpls
+    environment:
+      FAKEBGPLS_TED: /ted.yaml
+      FAKEBGPLS_PEER: 172.31.77.3
+      FAKEBGPLS_ROUTER_ID: 172.31.77.4
+      FAKEBGPLS_ASN: "65000"
+    volumes:
+      - ./iel/db/ted-lab.yaml:/ted.yaml:ro
+    networks:
+      visfox_cplane:
+        ipv4_address: 172.31.77.4
+    depends_on:
+      - visfox_gobgpd
+    restart: unless-stopped
+
+  visfox_headend_a: &headend
+    profiles: [cplane]
+    build:
+      context: ./infra/cplane/fakepcc
+    environment:
+      FAKEPCC_NAME: 100G-8KDG-Encap-A
+      FAKEPCC_PCE: 172.31.77.2:4189
+    networks:
+      visfox_cplane:
+        ipv4_address: 172.31.77.11
+    depends_on:
+      - visfox_polad
+    restart: unless-stopped
+  visfox_headend_b:
+    <<: *headend
+    environment:
+      FAKEPCC_NAME: 100G-8KDG-Encap-B
+      FAKEPCC_PCE: 172.31.77.2:4189
+    networks:
+      visfox_cplane:
+        ipv4_address: 172.31.77.12
+  visfox_headend_c:
+    <<: *headend
+    environment:
+      FAKEPCC_NAME: 100G-8KDG-Encap-C
+      FAKEPCC_PCE: 172.31.77.2:4189
+    networks:
+      visfox_cplane:
+        ipv4_address: 172.31.77.13
+  visfox_headend_d:
+    <<: *headend
+    environment:
+      FAKEPCC_NAME: 100G-8KDG-Encap-D
+      FAKEPCC_PCE: 172.31.77.2:4189
+    networks:
+      visfox_cplane:
+        ipv4_address: 172.31.77.14
+
+networks:
+  default:
+  # Local C-Plane lab: fixed addresses, since Pola tells PCEP sessions apart by the PCC address.
+  visfox_cplane:
+    ipam:
+      config:
+        - subnet: 172.31.77.0/24
+          # Dynamic addresses (the IEL) stay above the fixed ones.
+          ip_range: 172.31.77.128/25
+
+volumes:
+  visfox_go_cache:
+  visfox_go_mod:

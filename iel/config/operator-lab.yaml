@@ -1,0 +1,93 @@
+# Network operator config of the local C-Plane lab network (VISFOX_NETWORK=lab, TED db/ted-lab.yaml):
+# the testbed's composition and limits on a structured RFC 8986 SID design, with the TED learned
+# from BGP-LS (GoBGP), shared with PolaPCE. Needs the cplane profile.
+
+# TED source: seed (default) = the static TED file (VISFOX_TED_SEED); gobgp = the BGP-LS RIB of
+# GoBGP (what infra/cplane/fakebgpls advertises from db/ted-lab.yaml), read once at startup.
+ted:
+  source: gobgp
+  gobgp: "172.31.77.3:50051"
+
+# rfc8986: one locator per node; its End SID is the node SID (transit), the others are its services.
+sid_rule:
+  name: rfc8986
+  # No argument: every OUT has its own decap node.
+  arg: none
+  roles:
+    - { match: encap, role: headend, id_prefix: headend, label: "Headend {n}" }
+    # A switcher is a VVF that selects (catalog vvf-switcher); every service SID is one input port.
+    - { match: switcher, role: vvf, vvf_id: vvf-switcher, input_sids: true, id_prefix: sw, label: "SW{n}" }
+    - { match: caption, role: vvf, vvf_id: vvf-caption, id_prefix: caption, label: "Caption #{n}" }
+    - { match: converter, role: vvf, vvf_id: vvf-color-transcode-crop, id_prefix: color-transcode-crop, label: "Color / Transcode / Crop #{n}" }
+    - { match: decap, role: decap, id_prefix: decap, label: "Decap {n}" }
+
+# Display names that replace the rule's label (host name -> name). Pinned VVF nodes need one that
+# tells them apart, e.g. the material a caption node burns in. Names only: no manual id binding.
+labels:
+  100G-8KDG-Caption-1: "Caption: Logo"
+  100G-8KDG-Caption-2: "Caption: Score"
+  100G-8KDG-Caption-3: "Caption: Sponsor"
+
+# IN / OUT and the advertised host name of their headend / decap.
+sources:
+  - { id: in-1, name: KAIT-8K-01, video_format: 8k_dg, node: 100G-8KDG-Encap-A }
+  - { id: in-2, name: KAIT-8K-02, video_format: 8k_dg, node: 100G-8KDG-Encap-B }
+  - { id: in-3, name: GINOZA-8K, video_format: 8k_dg, node: 100G-8KDG-Encap-C }
+  - { id: in-4, name: StarBED-8K, video_format: 8k_dg, node: 100G-8KDG-Encap-D }
+destinations:
+  - { id: out-1, name: KAIT-8K-01, video_format: 8k_full, node: 100G-8KDG-Decap-1 }
+  - { id: out-2, name: KAIT-8K-02, video_format: 8k_full, node: 100G-8KDG-Decap-2 }
+  - { id: out-3, name: UDX-8K, video_format: 8k_full, node: 100G-8KDG-Decap-3 }
+  - { id: out-4, name: OSAKA-8K, video_format: 8k_full, node: 100G-8KDG-Decap-4 }
+
+# Physical wiring of the input ports of the VVFs that control the stream flow (switchers; testbed
+# constraint): input port -> IN id, or the host name of the upstream node. Ports not listed are not
+# offered. v2 derives this from the BGP-LS links.
+# mode (select VVFs): filter (default) = the switcher passes the selected stream by its SIDs and
+# every stream carries its whole path (ideal SRv6 SFC); swap = it rewrites the selected sub stream's
+# header with the main stream's (input with next 0), the current testbed (D4S).
+wiring:
+  - node: 100G-8KDG-Switcher-1
+    mode: filter
+    inputs: { a: in-1, b: in-2, c: in-3, d: in-4, e: 100G-8KDG-Switcher-2 }
+  - node: 100G-8KDG-Switcher-2
+    mode: filter
+    inputs: { a: in-1, b: in-2, c: in-3, d: in-4 }
+
+# Resource pool capacities the TED does not advertise (0 or omitted: no limit).
+limits:
+  # Streams one node of a VVF kind processes at once (same config only).
+  vvf_streams: { vvf-caption: 3, vvf-color-transcode-crop: 1 }
+  # Inputs and outputs of the VVFs that control the stream flow: a switcher NIC (100G) receives
+  # three 8K streams; a switcher sends out one stream.
+  ports:
+    vvf-switcher: { inputs: 3, outputs: 1 }
+  # A headend sends one stream (no branch VVF).
+  source_unicasts: 1
+  # How a STANDBY stream waits for its Take. switcher (hot standby): it is already sent into a
+  # switcher that feeds the OUT, so the Take only switches (smooth); the switcher and IN unicast
+  # pools are then reserved at STANDBY. none (cold standby): only VVF nodes are reserved and the
+  # Take sets up the whole path. The testbed switches smoothly only between streams it receives.
+  standby_feed: switcher
+
+# Southbound drivers. The lab needs the cplane profile; dryrun still works.
+orchestrator:
+  sr_policy: polapce
+  polapce:
+    address: "172.31.77.2:50052"
+    asn: 65000
+    # Pola's TED is the IEL's (both from BGP-LS): let it check the SIDs of every Segment List.
+    sid_validate: true
+  # PCEP session (PCC) and SRv6 address of every headend, SRv6 address of the policy endpoints (the
+  # loopbacks advertised in db/ted-lab.yaml).
+  nodes:
+    100G-8KDG-Encap-A: { pcep_peer: "172.31.77.11", address: "fd00:ff::11" }
+    100G-8KDG-Encap-B: { pcep_peer: "172.31.77.12", address: "fd00:ff::12" }
+    100G-8KDG-Encap-C: { pcep_peer: "172.31.77.13", address: "fd00:ff::13" }
+    100G-8KDG-Encap-D: { pcep_peer: "172.31.77.14", address: "fd00:ff::14" }
+    100G-8KDG-Decap-1: { address: "fd00:ff::51" }
+    100G-8KDG-Decap-2: { address: "fd00:ff::52" }
+    100G-8KDG-Decap-3: { address: "fd00:ff::53" }
+    100G-8KDG-Decap-4: { address: "fd00:ff::54" }
+  color_base: 100
+  vvf_settle_ms: 0

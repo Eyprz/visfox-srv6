@@ -1,0 +1,70 @@
+module visfox-srv6-ted {
+  yang-version 1.1;
+  namespace "urn:visfox:params:xml:ns:yang:visfox-srv6-ted";
+  prefix vxted;
+
+  import ietf-network {
+    prefix nw;
+    reference "RFC 8345: A YANG Data Model for Network Topologies";
+  }
+  import ietf-inet-types {
+    prefix inet;
+    reference "RFC 6991: Common YANG Data Types";
+  }
+
+  organization "VISFOX-SRv6";
+  description
+    "SRv6 facts of the TED as the control plane advertises them (BGP-LS in v2,
+     a static seed in v1): nodes, their host names, locators and SIDs.
+     Roles (VVF kind, switcher, decap) are not modeled here; the IEL derives them
+     from the SIDs with the SID interpretation rule.";
+
+  revision 2026-11-05 {
+    description "Initial revision.";
+  }
+
+  augment "/nw:networks/nw:network/nw:network-types" {
+    description "Marks a network as the SRv6 SFC domain TED.";
+    container srv6-sfc {
+      presence "The network is the SRv6 SFC domain TED.";
+      description "SRv6 SFC domain network type.";
+    }
+  }
+
+  augment "/nw:networks/nw:network/nw:node" {
+    when "../nw:network-types/vxted:srv6-sfc" {
+      description "Only for SRv6 SFC domain networks.";
+    }
+    description "SRv6 attributes of a node.";
+    container srv6 {
+      description "SRv6 attributes advertised for the node.";
+      leaf hostname {
+        type string;
+        description "Advertised host name (BGP-LS node name).";
+      }
+      leaf router-id {
+        type inet:ip-address-no-zone;
+        description "Router ID.";
+      }
+      list sid {
+        key "value";
+        description "Local SIDs advertised by the node (without the argument).";
+        leaf value {
+          type inet:ipv6-address-no-zone;
+          description "SID value, e.g. fd77:aa::.";
+        }
+        leaf behavior {
+          type string;
+          description "Endpoint behavior, e.g. End.AN or End.DX6, if advertised.";
+        }
+        container structure {
+          description "SID structure (RFC 9514); absent when not advertised.";
+          leaf locator-block-length { type uint8; description "Locator block length in bits."; }
+          leaf locator-node-length { type uint8; description "Locator node length in bits."; }
+          leaf function-length { type uint8; description "Function length in bits."; }
+          leaf argument-length { type uint8; description "Argument length in bits."; }
+        }
+      }
+    }
+  }
+}

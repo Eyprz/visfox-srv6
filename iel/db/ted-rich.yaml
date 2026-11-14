@@ -1,0 +1,42 @@
+# Static TED source of the "rich" network (VISFOX_NETWORK=rich): the same IN / OUT as the testbed
+# (db/ted.yaml) with plenty of VVF resources, to run VISFOX where the testbed limits do not apply.
+# Network operator config: config/operator-rich.yaml. SIDs follow the same fd77:XY:: convention.
+nodes:
+  # Headends (encap): the same as the testbed, so the local C-Plane lab (infra/cplane) serves both.
+  - { name: 100G-8KDG-Encap-A, router_id: 10.255.0.1 }
+  - { name: 100G-8KDG-Encap-B, router_id: 10.255.0.2 }
+  - { name: 100G-8KDG-Encap-C, router_id: 10.255.0.3 }
+  - { name: 100G-8KDG-Encap-D, router_id: 10.255.0.4 }
+
+  # One switcher per OUT, each receiving every IN (no cascade needed).
+  - name: 100G-8KDG-Switcher-1
+    router_id: 10.255.1.1
+    sids: ["fd77:aa::", "fd77:ab::", "fd77:ac::", "fd77:ad::"]
+  - name: 100G-8KDG-Switcher-2
+    router_id: 10.255.1.2
+    sids: ["fd77:da::", "fd77:db::", "fd77:dc::", "fd77:dd::"]
+  - name: 100G-8KDG-Switcher-3
+    router_id: 10.255.1.3
+    sids: ["fd77:3a::", "fd77:3b::", "fd77:3c::", "fd77:3d::"]
+  - name: 100G-8KDG-Switcher-4
+    router_id: 10.255.1.4
+    sids: ["fd77:4a::", "fd77:4b::", "fd77:4c::", "fd77:4d::"]
+
+  # Caption VVFs: the testbed's three materials and a fourth.
+  - { name: 100G-8KDG-Caption-1, router_id: 10.255.2.1, sids: ["fd77:ba::"] }
+  - { name: 100G-8KDG-Caption-2, router_id: 10.255.2.2, sids: ["fd77:bb::"] }
+  - { name: 100G-8KDG-Caption-3, router_id: 10.255.2.3, sids: ["fd77:bc::"] }
+  - { name: 100G-8KDG-Caption-4, router_id: 10.255.2.4, sids: ["fd77:bd::"] }
+
+  # Color / Transcode / Crop VVFs: eight, enough for every OUT's on-air and next stream.
+  - { name: 100G-8KDG-Converter-1, router_id: 10.255.3.1, sids: ["fd77:ca::"] }
+  - { name: 100G-8KDG-Converter-2, router_id: 10.255.3.2, sids: ["fd77:cb::"] }
+  - { name: 100G-8KDG-Converter-3, router_id: 10.255.3.3, sids: ["fd77:cc::"] }
+  - { name: 100G-8KDG-Converter-4, router_id: 10.255.3.4, sids: ["fd77:cd::"] }
+  - { name: 100G-8KDG-Converter-5, router_id: 10.255.3.5, sids: ["fd77:ce::"] }
+  - { name: 100G-8KDG-Converter-6, router_id: 10.255.3.6, sids: ["fd77:cf::"] }
+  - { name: 100G-8KDG-Converter-7, router_id: 10.255.3.7, sids: ["fd77:c7::"] }
+  - { name: 100G-8KDG-Converter-8, router_id: 10.255.3.8, sids: ["fd77:c8::"] }
+
+  # Decap (egress).
+  - { name: 100G-8KDG-Decap, router_id: 10.255.4.1, sids: ["fd77:ff::"] }

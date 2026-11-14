@@ -1,0 +1,84 @@
+# Network operator config of the "rich" network (VISFOX_NETWORK=rich, TED db/ted-rich.yaml): the
+# testbed's IN / OUT with plenty of VVF resources and without its limits on IN unicasts and switcher
+# cascades. Only what differs from config/operator.yaml is commented.
+
+# SID interpretation rule shared with the lower layer. d4s-testbed reads fd77:XY::N and takes the
+# role from the advertised host name; the first matching entry wins.
+sid_rule:
+  name: d4s-testbed
+  # ARG block: egress = the OUT's `arg` on the egress (decap) SID identifies the terminating node
+  # (RFC 8986 LOC:FUNCT:ARG). The current testbed puts the stream number on every SID instead
+  # (`fd77:XY::N`): use `stream` with an `arg` per IN there.
+  arg: egress
+  roles:
+    - { match: encap, role: headend, id_prefix: headend, label: "Headend {n}" }
+    # A switcher is a VVF that selects (catalog vvf-switcher); every SID is one input port.
+    - { match: switcher, role: vvf, vvf_id: vvf-switcher, input_sids: true, id_prefix: sw, label: "SW{n}" }
+    - { match: caption, role: vvf, vvf_id: vvf-caption, id_prefix: caption, label: "Caption #{n}" }
+    - { match: converter, role: vvf, vvf_id: vvf-color-transcode-crop, id_prefix: color-transcode-crop, label: "Color / Transcode / Crop #{n}" }
+    - { match: decap, role: decap, id_prefix: decap, label: "Decap {n}" }
+
+# Display names that replace the rule's label (host name -> name). Pinned VVF nodes need one that
+# tells them apart, e.g. the material a caption node burns in. Names only: no manual id binding.
+labels:
+  100G-8KDG-Caption-1: "Caption: Logo"
+  100G-8KDG-Caption-2: "Caption: Score"
+  100G-8KDG-Caption-3: "Caption: Sponsor"
+  100G-8KDG-Caption-4: "Caption: Clock"
+
+# IN / OUT and the advertised host name of their headend / decap.
+sources:
+  - { id: in-1, name: KAIT-8K-01, video_format: 8k_dg, node: 100G-8KDG-Encap-A }
+  - { id: in-2, name: KAIT-8K-02, video_format: 8k_dg, node: 100G-8KDG-Encap-B }
+  - { id: in-3, name: GINOZA-8K, video_format: 8k_dg, node: 100G-8KDG-Encap-C }
+  - { id: in-4, name: StarBED-8K, video_format: 8k_dg, node: 100G-8KDG-Encap-D }
+destinations:
+  - { id: out-1, name: KAIT-8K-01, video_format: 8k_full, node: 100G-8KDG-Decap, arg: 1 }
+  - { id: out-2, name: KAIT-8K-02, video_format: 8k_full, node: 100G-8KDG-Decap, arg: 2 }
+  - { id: out-3, name: UDX-8K, video_format: 8k_full, node: 100G-8KDG-Decap, arg: 3 }
+  - { id: out-4, name: OSAKA-8K, video_format: 8k_full, node: 100G-8KDG-Decap, arg: 4 }
+
+# Physical wiring of the switcher inputs (testbed constraint): input port -> IN id, or the host name
+# of the upstream switcher. Ports not listed are not offered. v2 derives this from the BGP-LS links.
+# mode: filter (default) = the switcher passes the selected stream by its SIDs and every stream
+# carries its whole path (ideal SRv6 SFC); swap = it rewrites the selected sub stream's header with
+# the main stream's (input with next 0), the current testbed (D4S).
+# One switcher per OUT, every IN wired to every switcher.
+wiring:
+  - { node: 100G-8KDG-Switcher-1, inputs: { a: in-1, b: in-2, c: in-3, d: in-4 } }
+  - { node: 100G-8KDG-Switcher-2, inputs: { a: in-1, b: in-2, c: in-3, d: in-4 } }
+  - { node: 100G-8KDG-Switcher-3, inputs: { a: in-1, b: in-2, c: in-3, d: in-4 } }
+  - { node: 100G-8KDG-Switcher-4, inputs: { a: in-1, b: in-2, c: in-3, d: in-4 } }
+
+# Resource pool capacities the TED does not advertise (0 or omitted: no limit).
+limits:
+  # Caption nodes share one material among four streams; converters stay one stream each.
+  vvf_streams: { vvf-caption: 4, vvf-color-transcode-crop: 1 }
+  # Every switcher receives all four INs.
+  ports:
+    vvf-switcher: { inputs: 4, outputs: 1 }
+  # Headends send to any number of OUTs (as if a branch VVF existed): 0 = no limit.
+  source_unicasts: 0
+  standby_feed: switcher
+
+# Southbound drivers. SR Policies: dryrun (log only) or polapce (PolaPCE
+# gRPC -> PCEP -> headend). Switchers and VVF nodes are dry-run until the d4s driver exists.
+orchestrator:
+  sr_policy: dryrun
+  polapce:
+    address: "172.31.77.2:50052"
+    asn: 65000
+    # Pola checks SIDs against its TED (BGP-LS); off while the IEL's TED is static (v1).
+    sid_validate: false
+  # PCEP session (PCC) and SRv6 address of every headend, SRv6 address of the policy endpoints.
+  # These are the local C-Plane lab's (infra/cplane); the testbed's come from its routers.
+  nodes:
+    100G-8KDG-Encap-A: { pcep_peer: "172.31.77.11", address: "fd77:e0::a" }
+    100G-8KDG-Encap-B: { pcep_peer: "172.31.77.12", address: "fd77:e0::b" }
+    100G-8KDG-Encap-C: { pcep_peer: "172.31.77.13", address: "fd77:e0::c" }
+    100G-8KDG-Encap-D: { pcep_peer: "172.31.77.14", address: "fd77:e0::d" }
+    100G-8KDG-Decap: { address: "fd77:ef::1" }
+  # SR Policy color = color_base + the OUT's position (one color per OUT).
+  color_base: 100
+  # Wait after the VVF configs of a Take, before the switch.
+  vvf_settle_ms: 0

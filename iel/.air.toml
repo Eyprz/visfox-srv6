@@ -1,0 +1,18 @@
+# air live reload for the IEL dev container (iel/Dockerfile).
+root = "."
+tmp_dir = "tmp"
+
+[build]
+cmd = "go build -o ./tmp/visfox ./cmd/visfox"
+entrypoint = ["./tmp/visfox"]
+include_ext = ["go", "yaml", "yang", "json", "sql"]
+exclude_dir = ["tmp"]
+delay = 500
+kill_delay = "2s"
+send_interrupt = true
+
+[log]
+time = false
+
+[misc]
+clean_on_exit = true

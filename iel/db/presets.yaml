@@ -1,0 +1,40 @@
+# Initial presets and their designer layouts. Inserted into SQLite only on the first start (an empty
+# database); afterwards presets are managed through the API (-presets-seed / VISFOX_PRESETS_SEED).
+# Caption nodes are pinned (vvf_node_id: caption-fd77-ba = "Caption: Logo", caption-fd77-bb = "Caption:
+# Score"); the Color / Transcode / Crop node is assigned by the IEL.
+# Chains follow the End.AN execution order (transcode -> crop -> color); other orders are accepted.
+
+presets:
+  - id: preset-1
+    name: Caption + Crop Center
+    description: Caption with the crop region at the center
+    chain:
+      - { instance_id: sf-caption-1, type: caption, vvf_node_id: caption-fd77-ba, params: { text: LIVE, position: bottom } }
+      - { instance_id: sf-transcode-1, type: transcode, params: {} }
+      - { instance_id: sf-crop-1, type: crop, params: { x: 2880, y: 1620 } }
+      - { instance_id: sf-color-1, type: color, params: { r: 0, g: 0, b: 0 } }
+  - id: preset-2
+    name: Caption + Crop Top-Left
+    description: Caption with the crop region at the top-left corner
+    chain:
+      - { instance_id: sf-caption-1, type: caption, vvf_node_id: caption-fd77-bb, params: { text: REPLAY, position: top } }
+      - { instance_id: sf-transcode-1, type: transcode, params: {} }
+      - { instance_id: sf-crop-1, type: crop, params: { x: 0, y: 0 } }
+      - { instance_id: sf-color-1, type: color, params: { r: 32, g: 0, b: -32 } }
+  - id: preset-3
+    name: Crop Center
+    description: Transcode / crop / color only
+    chain:
+      - { instance_id: sf-transcode-1, type: transcode, params: {} }
+      - { instance_id: sf-crop-1, type: crop, params: { x: 2880, y: 1620 } }
+      - { instance_id: sf-color-1, type: color, params: { r: 0, g: -128, b: 255 } }
+
+layouts:
+  - preset_id: preset-1
+    nodes:
+      - { node_id: in, position: { x: 250, y: 0 } }
+      - { node_id: sf-caption-1, position: { x: 250, y: 150 } }
+      - { node_id: sf-transcode-1, position: { x: 250, y: 300 } }
+      - { node_id: sf-crop-1, position: { x: 250, y: 450 } }
+      - { node_id: sf-color-1, position: { x: 250, y: 600 } }
+      - { node_id: out, position: { x: 250, y: 750 } }

@@ -1,0 +1,2432 @@
+openapi: 3.0.3
+info:
+  title: VISFOX-SRv6 App-IEL Interface Contract
+  description: |
+    API contract between the Application Layer (WebUI) and the Intent-Enabled Layer (Go engine) of VISFOX-SRv6.
+    A minimal interface that follows RFC 9315 (IBN) and strictly separates the SSoT (agreed goals, logical chains) from the SVoT (UI layout, real-time telemetry).
+
+    - Authentication: v1 runs as a demo in a closed local network and has no authentication (`security: []`).
+    - Errors: every 4xx / 5xx returns an `ErrorResponse`; `code` is one of `ErrorCode`.
+    - Error fallback: when applying a config to a router fails, the IEL rolls back to the last known good config (LKG)
+        and reports the result in `ErrorResponse.rollbacks` of the 502 / 504.
+    - Domain policy: the SRv6 SFC this application manages is one domain; the IEL holds its uniform policy (input / output
+        formats, ...) as static config (TED) (`domain` of `GET /presets/constraints`).
+    - Message language: texts the IEL generates (`ErrorResponse.message`, log messages, ...) are in English.
+  version: 1.0.0
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+
+servers:
+  - url: /api/v1
+    description: Current Host API Server
+
+security: []
+
+tags:
+  - name: resources
+    description: "Known resource catalog (SSoT: inputs, outputs, abstract SFC topology)"
+  - name: presets
+    description: "Service chain presets (SSoT: logical chains and function parameters, constraints, live parameter updates)"
+  - name: functions
+    description: Video functions (catalog of VVF components, parameter schemas, single validation)
+  - name: views
+    description: "UI rendering and layout metadata (SVoT: React Flow coordinates)"
+  - name: matrix
+    description: "Crosspoint matrix control (intent: switcher exclusivity, Take, pre-validation, real path)"
+  - name: events
+    description: "Real-time event stream (SVoT: SSE)"
+  - name: system
+    description: System settings, logs and health check (non-critical settings changeable from the GUI)
+
+paths:
+  # =========================================================================
+  # 1. Resource catalog (SSoT)
+  # =========================================================================
+  /resources/sources:
+    get:
+      tags: [resources]
+      summary: List the known video inputs (IN)
+      operationId: getSources
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SourceNode'
+
+  /resources/destinations:
+    get:
+      tags: [resources]
+      summary: List the known video outputs (OUT)
+      operationId: getDestinations
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DestinationNode'
+
+  /resources/topology:
+    get:
+      tags: [resources]
+      summary: Get the abstract SFC (L7) topology and its nodes (for visualization)
+      operationId: getTopology
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Topology'
+
+  /resources/switchers:
+    get:
+      tags: [resources]
+      summary: List the switcher nodes of the TED (input ports, destinations, active input)
+      description: |
+        A switcher is a VVF node that picks one of several input streams and sends it on (role vvf).
+        The matrix Take switches it, so it is not part of presets (chains) and the designer does not show it.
+        The active input (`active_input`) changes on a Take and is announced by SSE `switcher_update`.
+      operationId: getSwitchers
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SwitcherNode'
+
+  /resources/pools:
+    get:
+      tags: [resources]
+      summary: List the resource pools of the TED (capacity, sharing, when reserved, usage)
+      description: |
+        Returns every finite resource the streams use in one shape (`ResourcePool`), whatever its kind. New constraints
+        only add a `kind`; the schema and the UI stay the same. The IEL decides; the UI only displays.
+      operationId: getResourcePools
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ResourcePool'
+
+  # =========================================================================
+  # 2. Service chain presets (SSoT: pure logical chains)
+  # =========================================================================
+  /presets:
+    get:
+      tags: [presets]
+      summary: List the saved presets
+      operationId: getPresets
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Preset'
+    post:
+      tags: [presets]
+      summary: Save a new preset
+      description: |
+        The IEL assigns `id`. `chain[].instance_id` is a logical node id unique within the preset and equals the
+        `node_id` of the SVoT layout (assigned by the UI).
+        Runs the same validation as `POST /presets/validate` before saving; a violation returns 422 `INVALID_CHAIN`.
+        An IEL without preset editing returns 501 `NOT_IMPLEMENTED`; it serves predefined presets only,
+        and their parameters can still be changed with `PATCH /presets/{presetId}/functions/{instanceId}`.
+      operationId: createPreset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresetInput'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Preset'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          $ref: '#/components/responses/InvalidChain'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  /presets/constraints:
+    get:
+      tags: [presets]
+      summary: Get the constraints for creating a preset (chain)
+      description: |
+        The SFC designer fetches this when it opens the preset editor. The IEL owns the constraints; the UI follows them to
+        control node connections and whether a chain can be saved. Format conversion rules are in
+        `FunctionCatalogItem.format_transitions` of `GET /functions`.
+      operationId: getPresetConstraints
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChainConstraints'
+
+  /presets/validate:
+    post:
+      tags: [presets]
+      summary: Validate a preset (chain) before saving it (dry run)
+      description: |
+        Validates the chain structure and format consistency without saving. A violation returns 200 with `valid: false`.
+        `POST /presets` / `PUT /presets/{presetId}` always run the same validation before saving and return 422 `INVALID_CHAIN` on a violation.
+      operationId: validatePreset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresetInput'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresetValidationResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /presets/{presetId}:
+    parameters:
+      - $ref: '#/components/parameters/PresetId'
+    get:
+      tags: [presets]
+      summary: Get a preset
+      operationId: getPresetById
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Preset'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [presets]
+      summary: Update a preset
+      description: |
+        Cells refer to presets (`MatrixCell.live_chain` is the chain of the applied preset itself).
+        - The name, description and SLA can be updated at any time.
+        - A preset applied to any cell cannot change its chain structure (adding, removing or reordering functions, or changing
+            `instance_id` / `type` /
+            `vvf_node_id`) (409 `PRESET_IN_USE`, `details.cell_ids` lists the cells using it).
+        - Parameters change live with `PATCH /presets/{presetId}/functions/{instanceId}`. Parameters in this update that
+            differ from the current values are also applied live to the cells using the preset (on failure: LKG rollback and 502 / 504).
+            Only ON AIR cells push them to the VVF nodes; STANDBY cells push them at the next Take.
+        An IEL without preset editing returns 501 `NOT_IMPLEMENTED`; it serves predefined presets only,
+        and their parameters can still be changed with `PATCH /presets/{presetId}/functions/{instanceId}`.
+      operationId: updatePreset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresetInput'
+      responses:
+        '200':
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Preset'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/InvalidChain'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+    delete:
+      tags: [presets]
+      summary: Delete a preset
+      description: |
+        A preset applied to any cell cannot be deleted (409 `PRESET_IN_USE`, `details.cell_ids` lists the cells using it).
+        Its SVoT layout is deleted with it.
+        An IEL without preset editing returns 501 `NOT_IMPLEMENTED`; it serves predefined presets only,
+        and their parameters can still be changed with `PATCH /presets/{presetId}/functions/{instanceId}`.
+      operationId: deletePreset
+      responses:
+        '204':
+          description: Deleted
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '501':
+          $ref: '#/components/responses/NotImplemented'
+
+  # =========================================================================
+  # 3. Video functions (catalog and validation of VVF components)
+  # =========================================================================
+  /functions:
+    get:
+      tags: [functions]
+      summary: List every available network function type with its parameter schema
+      operationId: getFunctions
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FunctionCatalogItem'
+
+  /functions/{type}/schema:
+    parameters:
+      - $ref: '#/components/parameters/FunctionTypeParam'
+    get:
+      tags: [functions]
+      summary: Get the parameter specification of one network function
+      operationId: getFunctionSchema
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FunctionCatalogItem'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /functions/{type}/validate:
+    parameters:
+      - $ref: '#/components/parameters/FunctionTypeParam'
+    post:
+      tags: [functions]
+      summary: Validate network function parameters (slider and text checks)
+      description: "Invalid parameter values return 200 with `valid: false`; 400 is only for a malformed request."
+      operationId: validateFunctionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FunctionParamsInput'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParamValidationResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /presets/{presetId}/functions/{instanceId}:
+    parameters:
+      - $ref: '#/components/parameters/PresetId'
+      - $ref: '#/components/parameters/InstanceId'
+    patch:
+      tags: [presets]
+      summary: Update a preset's function parameters live (Live Parameter Update)
+      description: |
+        Called every 100 ms by the sliders and the crop position controller of the preset editor.
+        Saves the parameters to the preset and applies them live to every cell using the preset (`standby` / `active`).
+        Without such cells it only saves.
+        When applying to any router fails, the parameters go back to their previous values, the affected cells roll back to
+        the last known good config (LKG), and the IEL returns 502 / 504 (`ErrorResponse.rollbacks` has each cell's result).
+        When the streams no longer fit the resource pools with the new parameters (e.g. no free node to split streams that
+        shared a VVF node with the same config; `ResourcePool.sharing`), nothing changes and the IEL returns 409 `RESOURCE_EXHAUSTED`.
+      operationId: patchPresetFunctionParams
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FunctionParamsInput'
+      responses:
+        '200':
+          description: Saved and applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresetFunctionUpdateResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  # =========================================================================
+  # 4. UI rendering and layout metadata (SVoT: presentation)
+  # =========================================================================
+  /views/presets/{presetId}/layout:
+    parameters:
+      - $ref: '#/components/parameters/PresetId'
+    get:
+      tags: [views]
+      summary: Get the node coordinates and rendering metadata of a preset
+      operationId: getPresetLayout
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresetLayout'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    put:
+      tags: [views]
+      summary: Save the node coordinates and rendering metadata of a preset
+      description: |
+        404 when the preset does not exist. For a new preset, call this after `POST /presets` returned its `presetId`.
+      operationId: savePresetLayout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PresetLayout'
+      responses:
+        '200':
+          description: Saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresetLayout'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # =========================================================================
+  # 5. Crosspoint matrix control (intent)
+  # =========================================================================
+  /matrix:
+    get:
+      tags: [matrix]
+      summary: Get the state of every matrix cell (ACTIVE/STANDBY/OFF/DISCONNECTED and health)
+      operationId: getMatrixState
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatrixState'
+
+  /matrix/validate:
+    post:
+      tags: [matrix]
+      summary: Pre-validate assigning or changing a preset (TED, link delay, SF availability)
+      description: |
+        An infeasible assignment returns 200 with `feasible: false`. An unknown cell or preset returns 404.
+        Also checks that every stream after the assignment (see `VvfDefinition`) fits the VVF nodes
+        (`RESOURCE_EXHAUSTED` otherwise). An assignment that makes the first cell of an OUT STANDBY starts a new stream,
+        which is infeasible without a free node (no resources to realize the intent).
+        With `release_cells`, those cells are turned OFF before the check.
+        On a shortage, when turning STANDBY cells OFF would make it fit, the smallest such set of cells is returned in
+        `ValidationIssue.releasable_cells` (never ON AIR cells).
+      operationId: validateMatrixAssignment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MatrixValidationRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatrixValidationResult'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /matrix/cells/{cellId}:
+    parameters:
+      - $ref: '#/components/parameters/CellId'
+    get:
+      tags: [matrix]
+      summary: Get one cell (inspector, resync after an SSE reconnect)
+      operationId: getMatrixCell
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatrixCell'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /matrix/cells/{cellId}/take:
+    parameters:
+      - $ref: '#/components/parameters/CellId'
+    post:
+      tags: [matrix]
+      summary: Promote a cell from STANDBY to ACTIVE (exclusive switcher change)
+      description: |
+        The ACTIVE cell of the same OUT steps down to STANDBY.
+        The IEL first pushes the preset's config (function parameters) to the assigned VVF nodes, waits for it, and then
+        switches the headend (encap) SRv6 policy and the active input (`active_input`) of the switchers on the way
+        (the VVF config changes before the picture does, so the switch is not out of step).
+        The VVF nodes are reserved at STANDBY; when free ones exist, nodes other than those of the ON AIR cell are used
+        (so a config change never shows on the picture on air first).
+        The IEL also decides whether a switcher path from the IN to the OUT exists.
+        409 `INVALID_CELL_STATE` when the cell is not `standby`.
+        When the stream after the Take does not fit the resource pools (`GET /resources/pools`: VVF nodes, switcher outputs,
+        IN unicasts, ...), nothing changes and the IEL returns 409 `RESOURCE_EXHAUSTED` (`details.issues` says why).
+        Reasons known in advance are reported in `MatrixCell.take_issues`.
+      operationId: takeCell
+      responses:
+        '200':
+          description: Switched
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TakeResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /matrix/cells/{cellId}/standby:
+    parameters:
+      - $ref: '#/components/parameters/CellId'
+    post:
+      tags: [matrix]
+      summary: Demote a cell from ACTIVE to STANDBY (stop output)
+      description: |
+        Turns the ACTIVE cell back to STANDBY and stops the output to its OUT (the OUT has no ACTIVE cell afterwards).
+        The preset and config stay; a new Take resumes the output.
+        The UI asks for confirmation first, since this stops the picture on air.
+        409 `INVALID_CELL_STATE` when the cell is not `active`.
+        When applying to the headend router fails, the state rolls back and the IEL returns 502 / 504.
+      operationId: standbyCell
+      responses:
+        '200':
+          description: Demoted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatrixCell'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /matrix/cells/{cellId}/preset:
+    parameters:
+      - $ref: '#/components/parameters/CellId'
+    put:
+      tags: [matrix]
+      summary: Apply or change a cell's preset (new assignment or overwrite)
+      description: |
+        Applies a preset to the cell. The IEL always runs the same validation as `POST /matrix/validate` first.
+        The execution state afterwards (the picture on air never stops):
+        - `off` → `standby`
+        - `standby` -> `standby` (only the config is replaced)
+        - `active` -> `active` (the config is replaced while the output continues; LKG rollback on failure; the UI asks for confirmation first)
+        - `disconnected` → 409 `INVALID_CELL_STATE`
+
+        An infeasible assignment returns 422 `INFEASIBLE_ASSIGNMENT` (`details` holds the `MatrixValidationResult`).
+        Also checks the resource pools (issue code `RESOURCE_EXHAUSTED` on a shortage, e.g. no free node for a new stream).
+        STANDBY cells in `release_cells` are turned OFF in the same change before the assignment (the UI sends them after
+        the user confirmed `releasable_cells`). An ON AIR cell in `release_cells` returns 409 `INVALID_CELL_STATE`.
+        When applying to a router fails: 502 / 504 (`rollbacks` has the rollback results).
+      operationId: applyPresetToCell
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplyPresetRequest'
+      responses:
+        '200':
+          description: Applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatrixCell'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+    delete:
+      tags: [matrix]
+      summary: Remove a cell's preset (turn it OFF)
+      description: |
+        Removes the cell's preset and turns it OFF. An `off` cell returns 200 without change (idempotent).
+        An `active` cell can be removed too (its output to the OUT stops).
+      operationId: clearCellPreset
+      responses:
+        '200':
+          description: Removed (OFF)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MatrixCell'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '502':
+          $ref: '#/components/responses/BadGateway'
+        '504':
+          $ref: '#/components/responses/GatewayTimeout'
+
+  /matrix/cells/{cellId}/path:
+    parameters:
+      - $ref: '#/components/parameters/CellId'
+    get:
+      tags: [matrix]
+      summary: Get a cell's real path and per-hop metrics (topology map, Drift bottleneck)
+      description: |
+        Returns L7 (function sequence, hop delays) and L3 (SID list) diagnostics.
+        The L3 data is read-only diagnostics; the UI must never generate, compute or edit it.
+        409 `INVALID_CELL_STATE` for a cell without a preset (`off`) or `disconnected`.
+      operationId: getCellPath
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CellPath'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  # =========================================================================
+  # 6. Real-time event stream (SVoT: SSE)
+  # =========================================================================
+  /events:
+    get:
+      tags: [events]
+      summary: Real-time events (Server-Sent Events)
+      description: |
+        Pushes matrix state updates, telemetry / health updates, rollbacks, preset and config changes, switcher changes and system logs.
+
+        - The SSE `event:` field holds the event type (`type` of `SseEvent`); the `data:` field holds the
+            matching `SseEvent` JSON (with the same `type`) on one line.
+        - The `id:` field holds a monotonically increasing event id. On a reconnect with `Last-Event-ID`,
+            the IEL resends the later events still in its buffer. When they are no longer buffered it resends nothing
+            and the client resyncs everything with `GET /matrix`.
+        - `telemetry_update` carries every cell at the `sse_interval_ms` interval.
+        - `heartbeat` is sent when no other event was sent for 15 seconds.
+      operationId: streamEvents
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: Id of the last event received (resend request on reconnect)
+          schema:
+            type: string
+          example: '1024'
+      responses:
+        '200':
+          description: SSE stream connected
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/SseEvent'
+              example: |
+                id: 1024
+                event: matrix_update
+                data: {"type":"matrix_update","cell":{"cell_id":"IN3-OUT1","source_id":"in-3","destination_id":"out-1","execution_state":"active","health_state":"healthy"}}
+
+  # =========================================================================
+  # 7. System settings, logs and health check
+  # =========================================================================
+  /config:
+    get:
+      tags: [system]
+      summary: Get the system settings (CLI settings read-only, dynamic settings changeable from the GUI)
+      operationId: getConfig
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemConfig'
+    patch:
+      tags: [system]
+      summary: Change non-critical settings at runtime
+      description: |
+        Only the `DynamicConfig` items can change. Critical settings fixed by the CLI / environment (`ImmutableConfig`) cannot.
+        Changes apply to the runtime at once and are announced to every client by SSE `config_changed`.
+      operationId: updateConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DynamicConfigPatch'
+      responses:
+        '200':
+          description: Changed (returns all settings after the change)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SystemConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /logs:
+    get:
+      tags: [system]
+      summary: Get recent system logs (initial content of the log / alert bar)
+      description: Newest first. Later logs arrive as SSE `log` events.
+      operationId: getLogs
+      parameters:
+        - name: level
+          in: query
+          required: false
+          description: Only logs at or above this level
+          schema:
+            $ref: '#/components/schemas/LogLevel'
+        - name: cell_id
+          in: query
+          required: false
+          description: Only logs about this cell
+          schema:
+            type: string
+            pattern: '^IN[0-9]+-OUT[0-9]+$'
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 100
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LogEntry'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /healthz:
+    get:
+      tags: [system]
+      summary: IEL health check
+      operationId: getHealthz
+      responses:
+        '200':
+          description: Running
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceHealth'
+
+components:
+  parameters:
+    CellId:
+      name: cellId
+      in: path
+      required: true
+      description: Cell id (`IN{n}-OUT{m}`, matching `source_id` = `in-{n}` and `destination_id` = `out-{m}`)
+      schema:
+        type: string
+        pattern: '^IN[0-9]+-OUT[0-9]+$'
+      example: IN1-OUT1
+    PresetId:
+      name: presetId
+      in: path
+      required: true
+      schema:
+        type: string
+      example: preset-caption-color
+    InstanceId:
+      name: instanceId
+      in: path
+      required: true
+      description: Function instance id within the preset's chain
+      schema:
+        type: string
+      example: sf-color-1
+    FunctionTypeParam:
+      name: type
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/FunctionType'
+
+  responses:
+    BadRequest:
+      description: Invalid request (`INVALID_REQUEST` / `INVALID_PARAMS`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Resource not found (`RESOURCE_NOT_FOUND`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Not possible in the current state (`INVALID_CELL_STATE` / `PRESET_IN_USE`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    InvalidChain:
+      description: The chain violates a constraint (`INVALID_CHAIN`; `details.issues` lists the `ChainIssue`s)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnprocessableEntity:
+      description: Infeasible according to pre-validation (`INFEASIBLE_ASSIGNMENT`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    BadGateway:
+      description: A router MGMT API returned an error (`ROUTER_ERROR`); `rollbacks` holds the rollback results
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    GatewayTimeout:
+      description: A router MGMT API timed out (`ROUTER_TIMEOUT`); `rollbacks` holds the rollback results
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotImplemented:
+      description: Operation not supported by this IEL (`NOT_IMPLEMENTED`)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+
+  schemas:
+    # -----------------------------------------------------------------------
+    # Catalog and resources (v1 minimal)
+    # -----------------------------------------------------------------------
+    VideoFormat:
+      type: string
+      enum: [8k_full, 8k_dg]
+      description: |
+        Video format of the main stream (provisional).
+        - 8k_full: 8K FULL
+        - 8k_dg: 8K DG (Dual Green)
+      example: 8k_dg
+
+    MediaFormat:
+      type: object
+      description: |
+        Video format handled in the SRv6 SFC domain. Add properties here if more format axes appear.
+        Video transport standards (SMPTE ST 2110, i-Visto, ...) run below the SRv6 domain and are out of the scope of this API.
+      required: [video_format]
+      properties:
+        video_format:
+          $ref: '#/components/schemas/VideoFormat'
+
+    SourceNode:
+      type: object
+      required: [id, name, status, video_format]
+      properties:
+        id:
+          type: string
+          example: in-1
+        name:
+          type: string
+          description: Node name in the TED (display name). The UI derives the short label `IN n` from the id (`in-n`) and shows both
+          example: Studio-A
+        status:
+          type: string
+          enum: [online, offline]
+          example: online
+        video_format:
+          $ref: '#/components/schemas/VideoFormat'
+
+    DestinationNode:
+      type: object
+      required: [id, name, status, video_format]
+      description: "`video_format` is the format the OUT receives. A cell assignment whose chain output differs is infeasible."
+      properties:
+        id:
+          type: string
+          example: out-1
+        name:
+          type: string
+          description: Node name in the TED (display name). The UI derives the short label `OUT n` from the id (`out-n`) and shows both
+          example: Master
+        status:
+          type: string
+          enum: [online, offline]
+          example: online
+        video_format:
+          $ref: '#/components/schemas/VideoFormat'
+
+    TopologyNode:
+      type: object
+      required: [id, label, type]
+      properties:
+        id:
+          type: string
+          description: Resource id for source / destination; TED VVF node id for vvf (same as PathNode.node_id)
+          example: in-1
+        label:
+          type: string
+          example: KAIT-8K-01
+        type:
+          type: string
+          enum: [source, vvf, destination]
+          description: "vvf: a VVF node working as an SRv6 End.AN (may hold several functions). One VVF definition may have several nodes"
+          example: source
+        vvf_id:
+          type: string
+          nullable: true
+          description: VvfDefinition.id (type vvf only)
+          example: vvf-color-transcode-crop
+        function_types:
+          type: array
+          description: Function types the VVF provides (type vvf only)
+          items:
+            $ref: '#/components/schemas/FunctionType'
+          example: [transcode, crop, color]
+        status:
+          type: string
+          enum: [healthy, warning, remediating, critical, offline]
+          description: A HealthState value, or offline when the node is down
+          example: healthy
+
+    ResourcePool:
+      type: object
+      description: |
+        A finite resource the streams use (static limit from the TED, usage managed by the IEL).
+        There is one stream per OUT that has an ACTIVE or STANDBY cell; it is reserved at `reserved_at`
+        (`standby`: when the first cell of the OUT becomes STANDBY; `on_air`: at the Take).
+        Reserving and configuring are separate: VVF nodes are reserved at STANDBY, their config (parameters) is pushed at the Take.
+        A `dynamic` VVF has no node in the preset; the IEL picks which node of the VVF to use at every allocation
+        (a `pinned` VVF uses only the node the preset names; `VvfDefinition.allocation`).
+        On every assignment, Take and parameter change the IEL allocates every stream to the pools again and, if they do not
+        fit, reports `RESOURCE_EXHAUSTED` (`resource_kind` and `bottleneck_nodes`).
+
+        Known kinds (more may come without schema changes; the UI shows unknown kinds with `label` and the IEL's message):
+        - `vvf_node`: a node of a processing VVF (End.AN). `sharing: same_config` (a node holds one config,
+            and only streams with the same config share it, up to capacity). `reserved_at: standby`. E.g. a transcoder has capacity 1
+        - `vvf_output`: an output of a VVF that controls the stream flow (`select` / `replicate`: switchers, ...). group is the VVF id.
+            `select` sends one selected stream per output for one OUT; `replicate` uses one per destination.
+            In a domain with `DomainPolicy.switcher_required`, every stream passes at least one `select` VVF
+        - `vvf_input`: input streams one VVF receives at once (NIC bandwidth: three 8K streams on 100G). One per input port,
+            even when several outputs use the same input
+        - `source_unicast`: streams an IN's headend can send (headend outputs). One per destination (input port of the first
+            VVF). Through a branch (`replicate`) VVF one stream reaches several OUTs
+
+        `reserved_at` of the `vvf_input` / `vvf_output` and IN pools follows the network operator's setting (how STANDBY waits):
+        - `on_air` (cold standby): only ON AIR INs are sent to the switchers; the Take sets up the whole path
+        - `standby` (hot standby): STANDBY INs are also sent to the OUT's switchers, so the Take only switches.
+            Every OUT reserves one tree of switchers that receives all its ON AIR and STANDBY INs
+            (cascading receives more INs but leaves fewer switchers to other OUTs)
+      required: [id, kind, node_id, label, sharing, reserved_at, used_by]
+      properties:
+        id:
+          type: string
+          example: vvf_node:color-transcode-crop-1
+        kind:
+          type: string
+          description: Kind of resource (the known values above; more may come)
+          example: vvf_node
+        node_id:
+          type: string
+          description: TED node that owns the resource (VVF node, switcher or IN id)
+          example: color-transcode-crop-1
+        group:
+          type: string
+          nullable: true
+          description: Group of pools with the same use (VvfDefinition.id for vvf_node, null otherwise)
+          example: vvf-color-transcode-crop
+        label:
+          type: string
+          example: "Color / Transcode / Crop #1"
+        capacity:
+          type: integer
+          nullable: true
+          minimum: 1
+          description: "Streams that can use it at once (null: no limit)"
+          example: 1
+        sharing:
+          type: string
+          enum: [none, same_config]
+          description: "same_config: only streams with the same config (parameters) can share it"
+          example: same_config
+        reserved_at:
+          type: string
+          enum: [standby, on_air]
+          description: When a stream reserves this resource
+          example: standby
+        used_by:
+          type: array
+          items:
+            $ref: '#/components/schemas/PoolUse'
+
+    PoolUse:
+      type: object
+      description: A stream (OUT) using the resource
+      required: [destination_id, cell_id, on_air]
+      properties:
+        destination_id:
+          type: string
+          example: out-1
+        cell_id:
+          type: string
+          description: |
+            The cell that decides the stream's config (the OUT's ON AIR cell, else its first STANDBY cell).
+            For `source_unicast`, the cell sending the IN
+          example: IN1-OUT1
+        on_air:
+          type: boolean
+          example: true
+
+    TopologyLink:
+      type: object
+      required: [source, target]
+      properties:
+        source:
+          type: string
+          example: in-1
+        target:
+          type: string
+          example: caption-1
+        latency_ms:
+          type: number
+          example: 2.1
+        cell_ids:
+          type: array
+          description: |
+            Streams (cell ids) on this link: the ON AIR cell on an ON AIR link, the STANDBY cells on a `standby` link.
+            The UI colors the streams apart when several pass one node
+          items:
+            type: string
+          example: [IN1-OUT1]
+        standby:
+          type: boolean
+          default: false
+          description: |
+            True for a link that sends a STANDBY IN to a switcher (`select` VVF): a hot standby feed.
+            The picture reaches the switcher but is not selected, so it does not flow on to the OUT.
+            Wiring without a picture (neither ON AIR nor a feed) is not a link
+
+    Topology:
+      type: object
+      description: Abstract SFC (L7) topology graph
+      required: [nodes, links]
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopologyNode'
+        links:
+          type: array
+          items:
+            $ref: '#/components/schemas/TopologyLink'
+
+    # -----------------------------------------------------------------------
+    # Functions and presets (SSoT)
+    # -----------------------------------------------------------------------
+    FunctionType:
+      type: string
+      enum: [color, caption, transcode, delay, crop]
+      description: |
+        Video function type. Functions are components of a VVF (Virtual Video Function), an SRv6 End.AN;
+        the types that can be placed are decided by the TED (`vvfs` of `GET /functions` / `GET /presets/constraints`).
+        - color: color modulation (RGB adjustment)
+        - caption: caption insertion
+        - transcode: 8K DG -> 8K FULL conversion
+        - crop: crop (cuts an FHD region out of the 8K main stream and sends it as a side output; the main stream format is unchanged.
+            Parameters x / y are the top-left 8K coordinates of the region (x: 0-5760, y: 0-3240).
+            The destination multicast address is out of scope here)
+        - delay: delay insertion (future; the current TED does not offer it)
+      example: color
+
+    FunctionCatalogItem:
+      type: object
+      required: [type, name, description, param_schema]
+      properties:
+        type:
+          $ref: '#/components/schemas/FunctionType'
+        name:
+          type: string
+          example: Color modulation
+        description:
+          type: string
+          example: Real-time RGB color modulation
+        default_params:
+          type: object
+          additionalProperties: true
+        param_schema:
+          type: object
+          additionalProperties: true
+          description: Parameter constraints (JSON Schema)
+        format_transitions:
+          $ref: '#/components/schemas/FormatTransitions'
+        vvf_id:
+          type: string
+          description: VVF that provides this function (`VvfDefinition.id`)
+          example: vvf-color-transcode-crop
+
+    FormatTransitions:
+      type: object
+      description: |
+        Input video formats the function accepts and how it converts them to its output.
+        Each map's keys are the accepted inputs and its values the outputs. An omitted axis passes any input through.
+        Inputs missing from a map cannot enter the function.
+      properties:
+        video_format:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/VideoFormat'
+          example:
+            8k_dg: 8k_full
+
+    FunctionInstance:
+      type: object
+      required: [instance_id, type, params]
+      properties:
+        instance_id:
+          type: string
+          description: Logical node id unique within the preset (equals node_id of the SVoT layout)
+          example: sf-color-1
+        type:
+          $ref: '#/components/schemas/FunctionType'
+        vvf_node_id:
+          type: string
+          nullable: true
+          description: |
+            The VVF node used by a function of a `pinned` VVF (nodes differ, e.g. Captions burning in different material)
+            (`node_id` of `VvfDefinition.nodes`). Required for `pinned`; not given for a `dynamic` VVF (the IEL assigns it)
+          example: caption-fd77-ba
+        params:
+          type: object
+          additionalProperties: true
+          example:
+            r: 0
+            g: -128
+            b: 255
+
+    FunctionParamsInput:
+      type: object
+      required: [params]
+      properties:
+        params:
+          type: object
+          additionalProperties: true
+
+    SLA:
+      type: object
+      description: |
+        Latency SLA (for SLA evaluation in v2). v1 does not handle SLAs at all: the IEL never checks them or uses them for health,
+        and the UI neither edits nor shows them. The fields stay for v2 and may be ignored when sent
+      required: [max_latency_ms]
+      properties:
+        max_latency_ms:
+          type: number
+          minimum: 0
+          example: 20
+        max_jitter_ms:
+          type: number
+          minimum: 0
+          example: 2
+        priority:
+          type: string
+          enum: [normal, high, critical]
+          default: normal
+
+    Preset:
+      type: object
+      required: [id, name, chain]
+      properties:
+        id:
+          type: string
+          example: preset-caption-color
+        name:
+          type: string
+          example: Caption and color
+        description:
+          type: string
+          example: Caption overlay with color modulation
+        chain:
+          type: array
+          items:
+            $ref: '#/components/schemas/FunctionInstance'
+        default_sla:
+          allOf:
+            - $ref: '#/components/schemas/SLA'
+          description: Not used in v1 (for SLA evaluation in v2)
+        in_use_cell_ids:
+          type: array
+          readOnly: true
+          description: Cells using this preset (its chain structure cannot change while in use)
+          items:
+            type: string
+          example: [IN1-OUT1]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PresetInput:
+      type: object
+      required: [name, chain]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          example: Caption and color
+        description:
+          type: string
+        chain:
+          type: array
+          items:
+            $ref: '#/components/schemas/FunctionInstance'
+        default_sla:
+          allOf:
+            - $ref: '#/components/schemas/SLA'
+          description: Not used in v1 (for SLA evaluation in v2)
+
+    DomainPolicy:
+      type: object
+      description: |
+        Uniform policy of the SRv6 SFC domain this application manages (IEL static config / TED).
+        Since INs / OUTs are unknown while a preset is created, chain format consistency is validated against this policy.
+        If OUTs ever need different formats, per-destination overrides will be added to this schema
+        (cell assignment with `POST /matrix/validate` already validates against each `SourceNode` / `DestinationNode` format).
+      required: [source_format, destination_format]
+      properties:
+        source_format:
+          $ref: '#/components/schemas/MediaFormat'
+        destination_format:
+          $ref: '#/components/schemas/MediaFormat'
+        switcher_required:
+          type: boolean
+          description: |
+            False when omitted.
+            When true, every stream passes at least one `select` VVF (switcher)
+            (IN -> switcher -> processing VVFs -> OUT). A stream uses a switcher output (`ResourcePool` kind `vvf_output`);
+            without a free one it is `RESOURCE_EXHAUSTED` (resource_kind `vvf_output`).
+            The number of switcher outputs limits how many streams go out at once
+          example: true
+
+    VvfDefinition:
+      type: object
+      description: |
+        VVF (Virtual Video Function): a video function unit working as one SRv6 End.AN (static TED config).
+        The functions of a VVF with several functions must be placed together in the chain.
+        With `ordered: false` the Application Layer may place them in any order; the IEL reorders them into the
+        order the End.AN requires (internal) before handing them southbound.
+
+        A VVF node (End.AN) holds one config at a time. The number of nodes, sharing, limits and usage are
+        resource pools (`ResourcePool` kind `vvf_node`, group = this VVF's id).
+
+        VVFs that control the stream flow (`behavior` `select` / `replicate`: switchers, branches) use the same definition.
+        They have no functions to place in a chain (`function_types` is empty); the IEL places them on the way. Their inputs and
+        outputs are resource pools (`vvf_input` / `vvf_output`).
+      required: [id, name, function_types, require_all, contiguous, ordered, allocation]
+      properties:
+        id:
+          type: string
+          example: vvf-color-transcode-crop
+        name:
+          type: string
+          example: Color / Transcode / Crop
+        behavior:
+          type: string
+          enum: [process, select, replicate]
+          default: process
+          description: |
+            What the VVF does with streams (process when omitted):
+            - process: processes one stream and sends one; it has chain functions (e.g. Caption, Transcode)
+            - select: picks one of the streams on its input ports per output (e.g. a switcher; a Take switches it)
+            - replicate: copies the stream to several destinations (a branch; RFC 9524 Replication Segment)
+          example: process
+        function_types:
+          type: array
+          description: Function types of the VVF, in the execution order the End.AN requires (the IEL reorders chains into it southbound)
+          items:
+            $ref: '#/components/schemas/FunctionType'
+          example: [transcode, crop, color]
+        require_all:
+          type: boolean
+          description: When true, placing any of them requires placing all functions
+          example: true
+        contiguous:
+          type: boolean
+          description: When true, the functions must be placed next to each other in the chain
+          example: true
+        ordered:
+          type: boolean
+          description: When true, the functions must be placed in the order of `function_types`
+          example: false
+        allocation:
+          type: string
+          enum: [dynamic, pinned]
+          description: |
+            - dynamic: every node of the VVF works the same and can replace another. Presets hold no node; the IEL picks a free
+                node at every allocation (e.g. Color / Transcode / Crop)
+            - pinned: nodes differ (e.g. Captions burning in different material). A preset's function names its node with
+                `vvf_node_id`, and the UI shows each node as its own item
+          example: dynamic
+        nodes:
+          type: array
+          description: Nodes a `pinned` VVF can choose (TED VVF nodes); empty for `dynamic`
+          items:
+            $ref: '#/components/schemas/VvfNodeRef'
+
+    VvfNodeRef:
+      type: object
+      description: A VVF node a preset can name (`pinned` VVF)
+      required: [node_id, label]
+      properties:
+        node_id:
+          type: string
+          example: caption-fd77-ba
+        label:
+          type: string
+          description: Display name (network operator config; tells the nodes apart, e.g. by the material they burn in)
+          example: "Caption: KAIT logo"
+
+    ChainConstraints:
+      type: object
+      description: |
+        Constraints of a preset (chain). Generated from the IEL's static config (TED); the UI interprets them to control the designer and saving.
+        In v1 a chain is a straight line IN -> SF ... -> OUT; branches and loops are not allowed.
+      required: [topology, allow_loops, min_functions, vvfs, domain]
+      properties:
+        topology:
+          type: string
+          enum: [linear]
+          description: Chain shape. v1 only has linear (each node has at most one input and one output)
+        allow_loops:
+          type: boolean
+          example: false
+        min_functions:
+          type: integer
+          minimum: 0
+          example: 0
+        max_functions:
+          type: integer
+          minimum: 1
+          description: |
+            Maximum number of functions in one chain. Omitted when the TED has no overall limit (no limit).
+            The UI does not limit the total when it is omitted.
+          example: 8
+        max_instances_per_type:
+          type: object
+          description: |
+            Maximum per function type in one chain (only when the domain policy sets one).
+            Never derived from resources such as the number of VVF nodes: presets are created free of resources,
+            and shortages are checked when a cell is assigned (`POST /matrix/validate`). The resource estimate of a chain being
+            built is `resources` of `POST /presets/validate`. Types without a limit are omitted.
+          additionalProperties:
+            type: integer
+            minimum: 1
+          example:
+            delay: 1
+        vvfs:
+          type: array
+          description: Definitions of the VVFs that can be placed (each function of `GET /functions` belongs to one by `vvf_id`)
+          items:
+            $ref: '#/components/schemas/VvfDefinition'
+        domain:
+          $ref: '#/components/schemas/DomainPolicy'
+
+    PresetValidationResult:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+          example: false
+        issues:
+          type: array
+          items:
+            $ref: '#/components/schemas/ChainIssue'
+        output_format:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/MediaFormat'
+          nullable: true
+          description: Chain output format for the domain policy's input format (null when some function cannot take its input)
+        compatible_cell_ids:
+          type: array
+          description: Cells this chain can be assigned to with the current IN / OUT formats (ready for per-OUT formats)
+          items:
+            type: string
+          example: [IN1-OUT1, IN2-OUT1]
+        resources:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/PresetResourceEstimate'
+          nullable: true
+          description: |
+            Estimate for applying this chain with the current resources (only when valid; null for an invalid chain).
+            It does not affect saving (a chain can be saved without resources; the IEL refuses the assignment)
+
+    PresetResourceEstimate:
+      type: object
+      description: |
+        Resource estimate of the preset being built, computed by the IEL from the pools and the current streams.
+        New streams count as going ON AIR (including what the Take reserves).
+        The designer shows it live at the bottom of the screen
+      required: [available_streams, max_streams, requirements, assignable_cell_ids]
+      properties:
+        available_streams:
+          type: integer
+          nullable: true
+          minimum: 0
+          description: "Streams of this chain that can go out now with the current resources (at most the free OUTs; null: no limit)"
+          example: 0
+        max_streams:
+          type: integer
+          nullable: true
+          minimum: 0
+          description: "Streams of this chain that could go out at once with every resource free (null: no limit)"
+          example: 2
+        requirements:
+          type: array
+          description: Per resource kind, what one stream of this chain uses
+          items:
+            type: object
+            required: [kind, label, per_stream, pool_count, free_count]
+            properties:
+              kind:
+                type: string
+                example: vvf_node
+              group:
+                type: string
+                nullable: true
+                example: vvf-color-transcode-crop
+              label:
+                type: string
+                example: Color / Transcode / Crop
+              per_stream:
+                type: integer
+                description: Pools one stream uses (e.g. the number of this VVF in the chain)
+                example: 1
+              pool_count:
+                type: integer
+                example: 3
+              free_count:
+                type: integer
+                description: Pools no stream uses
+                example: 0
+        assignable_cell_ids:
+          type: array
+          description: "Cells this chain can be assigned to now (made STANDBY): those passing the format and resource checks"
+          items:
+            type: string
+          example: [IN1-OUT1, IN2-OUT1]
+        blocker:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/ValidationIssue'
+          nullable: true
+          description: Why no new stream can go out when available_streams is 0 (with the bottlenecks)
+
+    ChainIssue:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum: [EMPTY_CHAIN, MAX_FUNCTIONS_EXCEEDED, TYPE_LIMIT_EXCEEDED, DUPLICATE_INSTANCE_ID, FUNCTION_UNAVAILABLE, VVF_INCOMPLETE, VVF_NOT_CONTIGUOUS, VVF_ORDER, VVF_NODE_REQUIRED, VVF_NODE_UNKNOWN, FORMAT_MISMATCH, INVALID_PARAMS]
+          description: |
+            - EMPTY_CHAIN: fewer than min_functions
+            - MAX_FUNCTIONS_EXCEEDED / TYPE_LIMIT_EXCEEDED: above a domain policy limit (not a resource shortage)
+            - DUPLICATE_INSTANCE_ID: duplicated instance_id
+            - FUNCTION_UNAVAILABLE: no VVF in the TED provides the type
+            - VVF_INCOMPLETE: the functions of a require_all VVF are not all there (e.g. color alone).
+                Checked per VVF instance (one End.AN; a repeated type is another instance):
+                a lone color after a complete color / transcode / crop makes the second instance incomplete.
+                instance_id is the first function of that instance
+            - VVF_NOT_CONTIGUOUS: another function sits between the functions of one VVF
+            - VVF_ORDER: the functions of an ordered VVF are out of order
+            - VVF_NODE_REQUIRED: a function of a `pinned` VVF has no `vvf_node_id`
+            - VVF_NODE_UNKNOWN: `vvf_node_id` is not a node of the VVF (also when given for a `dynamic` VVF)
+            - FORMAT_MISMATCH: a function's input format does not match, or the chain output does not match the domain policy's output format
+                (e.g. a chain without transcode in a domain with 8K DG input)
+            - INVALID_PARAMS: invalid parameters
+          example: VVF_INCOMPLETE
+        message:
+          type: string
+          example: "VVF 'Color / Transcode / Crop' requires color, transcode and crop"
+        instance_id:
+          type: string
+          nullable: true
+          description: The function instance with the problem (null for a problem of the whole chain)
+          example: sf-color-1
+        vvf_id:
+          type: string
+          nullable: true
+          description: The VVF with the problem (VVF_* only)
+          example: vvf-color-transcode-crop
+
+    PresetFunctionUpdateResult:
+      type: object
+      required: [instance, applied_cell_ids]
+      properties:
+        instance:
+          $ref: '#/components/schemas/FunctionInstance'
+        applied_cell_ids:
+          type: array
+          description: Cells the change was applied to live (empty without such cells)
+          items:
+            type: string
+          example: [IN1-OUT1, IN3-OUT1]
+
+    ParamValidationResult:
+      type: object
+      required: [valid]
+      properties:
+        valid:
+          type: boolean
+          example: true
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/FieldError'
+
+    FieldError:
+      type: object
+      required: [message]
+      properties:
+        field:
+          type: string
+          example: params.r
+        message:
+          type: string
+          example: "must be between -255 and 255"
+
+    # -----------------------------------------------------------------------
+    # UI layout metadata (SVoT)
+    # -----------------------------------------------------------------------
+    PresetLayout:
+      type: object
+      required: [preset_id, nodes]
+      properties:
+        preset_id:
+          type: string
+          example: preset-caption-color
+        nodes:
+          type: array
+          items:
+            type: object
+            required: [node_id, position]
+            properties:
+              node_id:
+                type: string
+                description: instance_id in the chain. The IN / OUT end nodes use the reserved ids `in` / `out`
+                example: sf-color-1
+              position:
+                type: object
+                required: [x, y]
+                properties:
+                  x:
+                    type: number
+                    example: 250
+                  y:
+                    type: number
+                    example: 180
+        viewport:
+          type: object
+          properties:
+            x:
+              type: number
+            y:
+              type: number
+            zoom:
+              type: number
+
+    # -----------------------------------------------------------------------
+    # Matrix and intent control
+    # -----------------------------------------------------------------------
+    ExecutionState:
+      type: string
+      enum: [active, standby, off, disconnected]
+      description: |
+        - active: on air (at most one per OUT)
+        - standby: validated and waiting (can be promoted to ACTIVE at any time)
+        - off: not connected logically
+        - disconnected: physical failure, signal lost
+
+    HealthState:
+      type: string
+      enum: [healthy, warning, remediating, critical]
+      description: |
+        - healthy (blue): SLA kept (in sync)
+        - warning (yellow): minor error / intent drift
+        - remediating (red-blue): error fallback in progress (rolling back to the last known good config; output continues)
+        - critical (red): severe error / rollback failed, unrecoverable
+
+    CellTelemetry:
+      type: object
+      required: [e2e_latency_ms, jitter_ms, packet_loss_rate]
+      properties:
+        e2e_latency_ms:
+          type: number
+          example: 12.4
+        jitter_ms:
+          type: number
+          example: 0.15
+        packet_loss_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Packet loss rate (ratio 0-1)
+          example: 0.0
+        drift_detected:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: "Steady State"
+
+    CellConfigSnapshot:
+      type: object
+      description: Cell config before / after a rollback (for the UI; no L3 data)
+      required: [live_chain]
+      properties:
+        preset_id:
+          type: string
+          nullable: true
+          example: preset-caption-color
+        preset_name:
+          type: string
+          nullable: true
+          example: Caption and color
+        live_chain:
+          type: array
+          items:
+            $ref: '#/components/schemas/FunctionInstance'
+
+    RollbackInfo:
+      type: object
+      description: Record of an automatic rollback to the last known good config (LKG)
+      required: [cell_id, trigger, result, reason, from, occurred_at]
+      properties:
+        cell_id:
+          type: string
+          example: IN2-OUT2
+        trigger:
+          type: string
+          enum: [apply_error, sla_violation, function_failure]
+          description: |
+            - apply_error: router error / timeout while applying a config
+            - sla_violation: telemetry got worse after a config change (large SLA deviation)
+            - function_failure: a running function failed
+          example: apply_error
+        result:
+          type: string
+          enum: [in_progress, succeeded, failed]
+          example: succeeded
+        reason_code:
+          type: string
+          allOf:
+            - $ref: '#/components/schemas/ErrorCode'
+          nullable: true
+          description: Error code when trigger is apply_error (`ROUTER_ERROR` / `ROUTER_TIMEOUT`), null otherwise
+        reason:
+          type: string
+          example: "Router returned an error while applying color params"
+        from:
+          $ref: '#/components/schemas/CellConfigSnapshot'
+        to:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/CellConfigSnapshot'
+          nullable: true
+          description: The LKG restored. null when there is no LKG (result is failed)
+        occurred_at:
+          type: string
+          format: date-time
+
+    MatrixCell:
+      type: object
+      required: [cell_id, source_id, destination_id, execution_state]
+      properties:
+        cell_id:
+          type: string
+          pattern: '^IN[0-9]+-OUT[0-9]+$'
+          example: IN1-OUT1
+        source_id:
+          type: string
+          example: in-1
+        destination_id:
+          type: string
+          example: out-1
+        execution_state:
+          $ref: '#/components/schemas/ExecutionState'
+        health_state:
+          allOf:
+            - $ref: '#/components/schemas/HealthState'
+          description: |
+            Health state, judged from the gap between the preset's SLA target and the measured telemetry of the established path, and from automatic rollbacks.
+            Only `active` / `standby` cells have something to judge, so it is omitted for `off` (no preset or path) and
+            `disconnected` (physically cut) cells.
+        preset_id:
+          type: string
+          nullable: true
+          example: preset-caption-color
+        preset_name:
+          type: string
+          nullable: true
+          example: Caption and color
+        live_chain:
+          type: array
+          items:
+            $ref: '#/components/schemas/FunctionInstance'
+          description: Chain of the applied preset (with the preset's current parameters; no per-cell tuning)
+        sla:
+          allOf:
+            - $ref: '#/components/schemas/SLA'
+          description: Not used in v1 (for SLA evaluation in v2)
+        telemetry:
+          $ref: '#/components/schemas/CellTelemetry'
+        last_rollback:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/RollbackInfo'
+          nullable: true
+          description: The latest automatic rollback (the inspector's HEALTH field shows the reason and before -> after)
+        take_issues:
+          type: array
+          description: |
+            Every reason why this cell cannot be taken now (`standby` cells only; empty when it can be taken).
+            The IEL decides them from the resource pool allocation (e.g. `RESOURCE_EXHAUSTED` with `source_unicast` and `vvf_output`)
+            and announces changes with SSE `matrix_update`. The UI disables Take and shows the reasons
+          items:
+            $ref: '#/components/schemas/ValidationIssue'
+        updated_at:
+          type: string
+          format: date-time
+
+    MatrixState:
+      type: object
+      required: [cells]
+      properties:
+        cells:
+          type: array
+          items:
+            $ref: '#/components/schemas/MatrixCell'
+        updated_at:
+          type: string
+          format: date-time
+
+    ApplyPresetRequest:
+      type: object
+      required: [preset_id]
+      properties:
+        preset_id:
+          type: string
+          example: preset-color
+        release_cells:
+          type: array
+          description: STANDBY cells turned OFF in the same change as the assignment (the `ValidationIssue.releasable_cells` the user approved)
+          items:
+            type: string
+            pattern: '^IN[0-9]+-OUT[0-9]+$'
+          example: [IN1-OUT1]
+
+    MatrixValidationRequest:
+      type: object
+      required: [cell_id, preset_id]
+      properties:
+        cell_id:
+          type: string
+          pattern: '^IN[0-9]+-OUT[0-9]+$'
+          example: IN1-OUT1
+        preset_id:
+          type: string
+          example: preset-caption-color
+        release_cells:
+          type: array
+          description: STANDBY cells to turn OFF before validating
+          items:
+            type: string
+            pattern: '^IN[0-9]+-OUT[0-9]+$'
+          example: [IN1-OUT1]
+
+    MatrixValidationResult:
+      type: object
+      required: [feasible]
+      properties:
+        feasible:
+          type: boolean
+          example: true
+        estimated_latency_ms:
+          type: number
+          example: 14.2
+        target_sla_ms:
+          type: number
+          description: Not returned in v1 (for SLA evaluation in v2)
+          example: 20.0
+        reason:
+          type: string
+          example: "Validation passed: TED bandwidth and SF capacity available"
+        errors:
+          type: array
+          description: Why it is infeasible (when feasible is false)
+          items:
+            $ref: '#/components/schemas/ValidationIssue'
+
+    ValidationIssue:
+      type: object
+      description: |
+        Why an assignment, Take or parameter change cannot be realized (a model shared by the IEL and the UI).
+        code is one of a few generic codes; every resource shortage is `RESOURCE_EXHAUSTED` with `resource_kind`.
+        The UI translates the known codes / resource kinds and shows `message` (the IEL's English explanation) for unknown ones.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: |
+            Known values (more may come):
+            - RESOURCE_EXHAUSTED: a resource pool has no room (`resource_kind`, `bottleneck_nodes`)
+            - FORMAT_MISMATCH: the chain does not match the IN / OUT video formats
+            - NODE_OFFLINE: the IN or OUT is disconnected
+            - FUNCTION_UNAVAILABLE: no VVF provides a needed function
+            - SLA_EXCEEDED / BANDWIDTH_EXCEEDED: not used in v1 (v2)
+          example: RESOURCE_EXHAUSTED
+        message:
+          type: string
+          description: "The IEL's explanation (English: which resource runs short for which OUT, ...)"
+          example: No free Switcher output for the stream to out-3
+        resource_kind:
+          type: string
+          nullable: true
+          description: For RESOURCE_EXHAUSTED, the kind of resource that runs short (`ResourcePool.kind`)
+          example: vvf_output
+        bottleneck_nodes:
+          type: array
+          description: For RESOURCE_EXHAUSTED, the nodes of the pools that ran short and the streams (OUTs) using each
+          items:
+            $ref: '#/components/schemas/BottleneckNode'
+        releasable_cells:
+          type: array
+          description: |
+            When an assignment check (`POST /matrix/validate`, 422 of `PUT .../preset`) is RESOURCE_EXHAUSTED, the STANDBY cells
+            that would make it fit when turned OFF (the smallest set; never ON AIR cells). The UI asks the user and,
+            once approved, applies with them in `ApplyPresetRequest.release_cells`. Omitted when releasing does not help.
+          items:
+            type: string
+          example: [IN1-OUT1]
+
+    BottleneckNode:
+      type: object
+      required: [node_id, label, destination_ids]
+      properties:
+        node_id:
+          type: string
+          example: sw-1
+        label:
+          type: string
+          example: SW1
+        destination_ids:
+          type: array
+          description: OUTs of the streams using this node (its pool)
+          items:
+            type: string
+          example: [out-1]
+
+    TakeResponse:
+      type: object
+      required: [activated_cell]
+      properties:
+        activated_cell:
+          type: string
+          example: IN3-OUT1
+        deactivated_cell:
+          type: string
+          nullable: true
+          description: The cell demoted to STANDBY (null when the OUT had no ACTIVE cell)
+          example: IN1-OUT1
+        switchers:
+          type: array
+          description: Switchers whose active input the Take changed (empty without switchers on the way)
+          items:
+            $ref: '#/components/schemas/SwitcherState'
+        message:
+          type: string
+          example: "Take executed: IN3-OUT1 is now ACTIVE, IN1-OUT1 demoted to STANDBY"
+
+    CellPath:
+      type: object
+      description: A cell's real path (L7 function sequence, per-hop metrics, L3 diagnostics)
+      required: [cell_id, nodes, hops]
+      properties:
+        cell_id:
+          type: string
+          example: IN1-OUT1
+        e2e_latency_ms:
+          type: number
+          example: 8.1
+        target_sla_ms:
+          type: number
+          description: Not returned in v1 (for SLA evaluation in v2)
+          example: 20
+        nodes:
+          type: array
+          description: Nodes on the path (IN -> functions -> OUT)
+          items:
+            $ref: '#/components/schemas/PathNode'
+        hops:
+          type: array
+          description: Hops between adjacent nodes (in the order of nodes)
+          items:
+            $ref: '#/components/schemas/PathHop'
+        segment_list:
+          type: array
+          readOnly: true
+          description: SRv6 Segment List in use (L3 diagnostics; the UI only displays it)
+          items:
+            type: string
+          example: ["fc00:1::101", "fc00:1::102", "fc00:1::200"]
+        bottleneck:
+          type: object
+          nullable: true
+          description: Where the SLA is exceeded (null when it is not)
+          required: [kind, ref]
+          properties:
+            kind:
+              type: string
+              enum: [hop, vvf]
+            ref:
+              type: string
+              description: '"{from}->{to}" for kind hop, node_id for vvf'
+              example: "caption-1->color-transcode-crop-1"
+
+    PathNode:
+      type: object
+      required: [node_id, role, label]
+      properties:
+        node_id:
+          type: string
+          description: |
+            source_id / destination_id for headend / egress, the TED VVF node id for vvf (one node per End.AN).
+            When one VVF definition has several nodes (e.g. two caption nodes), every VVF in the chain gets its own node.
+            For an `active` cell the nodes processing now, for a `standby` cell the nodes a Take would use now.
+            Without a node to assign, the VvfDefinition.id with `unassigned: true` (sid null).
+          example: color-transcode-crop-1
+        unassigned:
+          type: boolean
+          description: No node can be assigned to the processing VVF (see `MatrixCell.take_issues`)
+          example: false
+        vvf_id:
+          type: string
+          nullable: true
+          description: VvfDefinition.id of this node (processing nodes with role vvf only; null for switchers)
+          example: vvf-color-transcode-crop
+        switcher:
+          type: object
+          nullable: true
+          description: |
+            Switcher nodes only: the input port this cell's stream enters (role vvf).
+            With cascaded switchers they are listed upstream first
+          required: [switcher_id, input_port]
+          properties:
+            switcher_id:
+              type: string
+              example: sw-1
+            input_port:
+              type: string
+              example: a
+        role:
+          type: string
+          enum: [headend, vvf, transit, egress]
+          description: "vvf: a VVF working as an SRv6 End.AN. It has one SID and may hold several functions"
+          example: vvf
+        label:
+          type: string
+          example: "Color / Transcode / Crop"
+        instance_ids:
+          type: array
+          description: Function instances of the chain this VVF processes (role vvf only; in the End.AN order the IEL sorted them into)
+          items:
+            type: string
+          example: [sf-transcode-1, sf-crop-1, sf-color-1]
+        router_id:
+          type: string
+          readOnly: true
+          description: Router the node runs on (L3 diagnostics)
+          example: rtr-02
+        sid:
+          type: string
+          nullable: true
+          readOnly: true
+          description: SRv6 SID of the node (L3 diagnostics; the UI only displays it)
+          example: "fc00:1::102"
+        processing_latency_ms:
+          type: number
+          nullable: true
+          description: Processing delay of the VVF itself
+          example: 0.6
+        health_state:
+          $ref: '#/components/schemas/HealthState'
+
+    PathHop:
+      type: object
+      required: [from, to]
+      properties:
+        from:
+          type: string
+          example: sf-caption-1
+        to:
+          type: string
+          example: sf-color-1
+        latency_ms:
+          type: number
+          example: 1.8
+        packet_loss_rate:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.0
+        bandwidth_utilization:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Link bandwidth utilization (0-1)
+          example: 0.42
+
+    # -----------------------------------------------------------------------
+    # System settings and logs
+    # -----------------------------------------------------------------------
+    LogLevel:
+      type: string
+      enum: [debug, info, warn, error]
+      example: info
+
+    ImmutableConfig:
+      type: object
+      readOnly: true
+      description: Critical settings fixed at startup by the CLI / environment (read-only)
+      required: [listen_addr, db_path, router_timeout_ms]
+      properties:
+        listen_addr:
+          type: string
+          example: ":8080"
+        db_path:
+          type: string
+          example: "./visfox.db"
+        seed_path:
+          type: string
+          example: "./db/seed.sql"
+        router_timeout_ms:
+          type: integer
+          example: 3000
+
+    DynamicConfig:
+      type: object
+      description: Non-critical settings changeable at runtime from the GUI / REST
+      required: [sse_interval_ms, metrics_dump_interval_s, log_level]
+      properties:
+        sse_interval_ms:
+          type: integer
+          minimum: 100
+          description: Interval of SSE telemetry_update
+          example: 1000
+        metrics_dump_interval_s:
+          type: integer
+          minimum: 10
+          description: Interval of the metrics SQLite dump
+          example: 30
+        default_sla:
+          allOf:
+            - $ref: '#/components/schemas/SLA'
+          description: Not used in v1 (for SLA evaluation in v2)
+        log_level:
+          $ref: '#/components/schemas/LogLevel'
+
+    DynamicConfigPatch:
+      type: object
+      description: Only the items to change
+      minProperties: 1
+      properties:
+        sse_interval_ms:
+          type: integer
+          minimum: 100
+        metrics_dump_interval_s:
+          type: integer
+          minimum: 10
+        default_sla:
+          allOf:
+            - $ref: '#/components/schemas/SLA'
+          description: Not used in v1 (for SLA evaluation in v2)
+        log_level:
+          $ref: '#/components/schemas/LogLevel'
+
+    SystemConfig:
+      type: object
+      required: [immutable, dynamic]
+      properties:
+        immutable:
+          $ref: '#/components/schemas/ImmutableConfig'
+        dynamic:
+          $ref: '#/components/schemas/DynamicConfig'
+
+    LogEntry:
+      type: object
+      required: [id, timestamp, level, message]
+      properties:
+        id:
+          type: string
+          example: log-000123
+        timestamp:
+          type: string
+          format: date-time
+        level:
+          $ref: '#/components/schemas/LogLevel'
+        cell_id:
+          type: string
+          nullable: true
+          example: IN2-OUT2
+        code:
+          type: string
+          nullable: true
+          description: Related ErrorCode (for logs caused by an error)
+          example: ROUTER_ERROR
+        message:
+          type: string
+          example: "IN2-OUT2: rolled back to the previous config (Caption and color) after an error applying the color parameters"
+
+    ServiceHealth:
+      type: object
+      required: [status, version]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+          example: ok
+        version:
+          type: string
+          example: "1.0.0"
+        uptime_s:
+          type: integer
+          example: 3600
+
+    # -----------------------------------------------------------------------
+    # SSE events
+    # -----------------------------------------------------------------------
+    SwitcherInput:
+      type: object
+      required: [port, from]
+      properties:
+        port:
+          type: string
+          description: "Input port name (a, b, c, ...: inputs from encaps first, then those from upstream switchers)"
+          example: a
+        from:
+          type: string
+          description: "Where the input comes from: a source_id (encap) or the id of an upstream switcher"
+          example: in-1
+
+    SwitcherNode:
+      type: object
+      description: |
+        A switcher node of the TED (a node of a `behavior: select` VVF, with its input ports and wiring).
+        Its output and input limits are resource pools (kind `vvf_output` / `vvf_input`).
+        A switcher's output goes through processing VVFs to OUTs (`destination_ids`) or to another switcher's input
+        (cascade; `inputs[].from` downstream). It can do both (e.g. SW2's output can go to SW1 and to VVFs).
+        The IEL assigns the switchers on the way per stream (OUT); a Take switches every switcher on the way.
+      required: [id, label, inputs, destination_ids]
+      properties:
+        id:
+          type: string
+          description: Node id (same as PathNode.node_id / TopologyNode.id)
+          example: sw-1
+        label:
+          type: string
+          example: Switcher (Sapporo)
+        router_id:
+          type: string
+          readOnly: true
+          description: Router the node runs on (L3 diagnostics)
+          example: rtr-06
+        sid:
+          type: string
+          nullable: true
+          readOnly: true
+          description: SRv6 SID of the node (L3 diagnostics; the UI only displays it)
+          example: "fc00:1::110"
+        inputs:
+          type: array
+          items:
+            $ref: '#/components/schemas/SwitcherInput'
+        destination_ids:
+          type: array
+          description: Destinations this switcher's output reaches through processing VVFs (outputs to a downstream switcher are its `inputs[].from`)
+          items:
+            type: string
+          example: [out-1]
+        active_input:
+          type: string
+          nullable: true
+          description: Active input port (null when none is selected)
+          example: a
+
+    SwitcherState:
+      type: object
+      required: [switcher_id, active_input]
+      properties:
+        switcher_id:
+          type: string
+          example: sw-1
+        active_input:
+          type: string
+          nullable: true
+          example: b
+
+    SwitcherUpdateEvent:
+      type: object
+      required: [type, switchers]
+      properties:
+        type:
+          type: string
+          enum: [switcher_update]
+        switchers:
+          type: array
+          items:
+            $ref: '#/components/schemas/SwitcherState'
+
+    SseEvent:
+      description: |
+        JSON of the SSE `data:`. `type` equals the SSE `event:` field.
+        - matrix_update: a cell's execution state, preset or live_chain changed (the whole cell)
+        - telemetry_update: telemetry and health of every cell (every sse_interval_ms)
+        - rollback: an automatic rollback started (in_progress) or finished (succeeded / failed)
+        - preset_changed: a preset was created, updated or deleted
+        - config_changed: dynamic settings changed
+        - switcher_update: a switcher's active input changed (Take, ...)
+        - log: system log
+        - heartbeat: keep-alive (when no other event for 15 seconds)
+      oneOf:
+        - $ref: '#/components/schemas/MatrixUpdateEvent'
+        - $ref: '#/components/schemas/TelemetryUpdateEvent'
+        - $ref: '#/components/schemas/RollbackEvent'
+        - $ref: '#/components/schemas/PresetChangedEvent'
+        - $ref: '#/components/schemas/ConfigChangedEvent'
+        - $ref: '#/components/schemas/SwitcherUpdateEvent'
+        - $ref: '#/components/schemas/LogEvent'
+        - $ref: '#/components/schemas/HeartbeatEvent'
+      discriminator:
+        propertyName: type
+        mapping:
+          matrix_update: '#/components/schemas/MatrixUpdateEvent'
+          telemetry_update: '#/components/schemas/TelemetryUpdateEvent'
+          rollback: '#/components/schemas/RollbackEvent'
+          preset_changed: '#/components/schemas/PresetChangedEvent'
+          config_changed: '#/components/schemas/ConfigChangedEvent'
+          switcher_update: '#/components/schemas/SwitcherUpdateEvent'
+          log: '#/components/schemas/LogEvent'
+          heartbeat: '#/components/schemas/HeartbeatEvent'
+
+    MatrixUpdateEvent:
+      type: object
+      required: [type, cell]
+      properties:
+        type:
+          type: string
+          enum: [matrix_update]
+        cell:
+          $ref: '#/components/schemas/MatrixCell'
+
+    TelemetryUpdateEvent:
+      type: object
+      required: [type, cells]
+      properties:
+        type:
+          type: string
+          enum: [telemetry_update]
+        cells:
+          type: array
+          description: Only `active` / `standby` cells with measured telemetry
+          items:
+            type: object
+            required: [cell_id, health_state, telemetry]
+            properties:
+              cell_id:
+                type: string
+                example: IN1-OUT1
+              health_state:
+                $ref: '#/components/schemas/HealthState'
+              telemetry:
+                $ref: '#/components/schemas/CellTelemetry'
+
+    RollbackEvent:
+      type: object
+      required: [type, rollback]
+      properties:
+        type:
+          type: string
+          enum: [rollback]
+        rollback:
+          $ref: '#/components/schemas/RollbackInfo'
+
+    PresetChangedEvent:
+      type: object
+      required: [type, action, preset_id]
+      properties:
+        type:
+          type: string
+          enum: [preset_changed]
+        action:
+          type: string
+          enum: [created, updated, deleted]
+        preset_id:
+          type: string
+          example: preset-caption-color
+
+    ConfigChangedEvent:
+      type: object
+      required: [type, config]
+      properties:
+        type:
+          type: string
+          enum: [config_changed]
+        config:
+          $ref: '#/components/schemas/DynamicConfig'
+
+    LogEvent:
+      type: object
+      required: [type, log]
+      properties:
+        type:
+          type: string
+          enum: [log]
+        log:
+          $ref: '#/components/schemas/LogEntry'
+
+    HeartbeatEvent:
+      type: object
+      required: [type, timestamp]
+      properties:
+        type:
+          type: string
+          enum: [heartbeat]
+        timestamp:
+          type: string
+          format: date-time
+
+    # -----------------------------------------------------------------------
+    # Errors
+    # -----------------------------------------------------------------------
+    ErrorCode:
+      type: string
+      enum:
+        - INVALID_REQUEST
+        - INVALID_PARAMS
+        - RESOURCE_NOT_FOUND
+        - INVALID_CELL_STATE
+        - PRESET_IN_USE
+        - INVALID_CHAIN
+        - INFEASIBLE_ASSIGNMENT
+        - RESOURCE_EXHAUSTED
+        - ROUTER_ERROR
+        - ROUTER_TIMEOUT
+        - INTERNAL_ERROR
+        - NOT_IMPLEMENTED
+      description: |
+        - INVALID_REQUEST (400): malformed request
+        - INVALID_PARAMS (400): invalid function parameters or settings
+        - RESOURCE_NOT_FOUND (404): no such cell, preset, function type, ...
+        - INVALID_CELL_STATE (409): not possible in the cell's current state (e.g. Take of a cell that is not standby, standby of one that is not active)
+        - PRESET_IN_USE (409): deleting a preset in use, or changing its chain structure
+        - INVALID_CHAIN (422): the preset's chain violates a constraint (structure, format consistency)
+        - INFEASIBLE_ASSIGNMENT (422): infeasible according to pre-validation (SLA, bandwidth, SF availability, format mismatch)
+        - RESOURCE_EXHAUSTED (409): no room in a resource pool for the Take or parameter change (`details.issues` holds `ValidationIssue`s)
+        - ROUTER_ERROR (502): a router MGMT API returned an error
+        - ROUTER_TIMEOUT (504): a router MGMT API timed out
+        - INTERNAL_ERROR (500): internal IEL error
+        - NOT_IMPLEMENTED (501): an operation this IEL does not support (e.g. creating, changing or deleting presets without preset editing).
+            The UI marks the operation as unsupported and shows `message`
+      example: INVALID_CELL_STATE
+
+    ErrorResponse:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          $ref: '#/components/schemas/ErrorCode'
+        message:
+          type: string
+          example: "IN3-OUT1 is not in standby state"
+        details:
+          type: object
+          additionalProperties: true
+          description: |
+            Extra information per error kind.
+            - PRESET_IN_USE: `{ "cell_ids": ["IN1-OUT1"] }`
+            - INVALID_CHAIN: `{ "issues": [ChainIssue] }`
+            - INFEASIBLE_ASSIGNMENT: `MatrixValidationResult`
+            - INVALID_PARAMS: `{ "errors": [FieldError] }`
+        rollbacks:
+          type: array
+          description: Per affected cell, the rollback result of a failed router apply (502 / 504)
+          items:
+            $ref: '#/components/schemas/RollbackInfo'

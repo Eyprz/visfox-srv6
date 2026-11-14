@@ -1,0 +1,103 @@
+# TED of the local C-Plane lab network (VISFOX_NETWORK=lab). The
+# stand-in BGP-LS speaker (infra/cplane/fakebgpls) advertises it to GoBGP; PolaPCE and the IEL both
+# learn it from there (BGP-LS: nodes, loopbacks, SRv6 SIDs, links), so the IEL keeps no static TED
+# and PolaPCE checks the IEL's Segment Lists against the same TED.
+#
+# Same composition as the testbed (db/ted.yaml) with a structured RFC 8986 SID design:
+# - one locator fd00:0:NN::/48 per node (block 32 bits, node 16, function 16, no argument);
+# - fd00:0:NN:: is the node's End SID (node SID: transit, not a service);
+# - fd00:0:NN:F:: are its service SIDs: the VVF function, or one per switcher input port (F = a, b,
+#   ...);
+# - a decap node advertises only its decap SID (End.DT6). Every OUT has its own decap node, so no
+#   egress argument is needed.
+# The IEL's Segment Lists carry only service SIDs; the IGP routes between them by locator.
+# VVF functions (End.AN) have no IANA code point: the speaker advertises them as Opaque (65535).
+sid_structure: { locator_block: 32, locator_node: 16, function: 16, argument: 0 }
+
+nodes:
+  # Headends (encap). The operator config binds IN 1-4 to them.
+  - { name: 100G-8KDG-Encap-A, router_id: 10.255.0.1, loopback: "fd00:ff::11", sids: [{ value: "fd00:0:11::", behavior: End }] }
+  - { name: 100G-8KDG-Encap-B, router_id: 10.255.0.2, loopback: "fd00:ff::12", sids: [{ value: "fd00:0:12::", behavior: End }] }
+  - { name: 100G-8KDG-Encap-C, router_id: 10.255.0.3, loopback: "fd00:ff::13", sids: [{ value: "fd00:0:13::", behavior: End }] }
+  - { name: 100G-8KDG-Encap-D, router_id: 10.255.0.4, loopback: "fd00:ff::14", sids: [{ value: "fd00:0:14::", behavior: End }] }
+
+  # Core routers: transit only (the SID interpretation rule leaves them unclassified).
+  - { name: Core-P-1, router_id: 10.255.9.1, loopback: "fd00:ff::1", sids: [{ value: "fd00:0:1::", behavior: End }] }
+  - { name: Core-P-2, router_id: 10.255.9.2, loopback: "fd00:ff::2", sids: [{ value: "fd00:0:2::", behavior: End }] }
+
+  # Switchers: one service SID per input port. SW1 inputs a-d come from the headends, e from SW2.
+  - name: 100G-8KDG-Switcher-1
+    router_id: 10.255.1.1
+    loopback: "fd00:ff::21"
+    sids:
+      - { value: "fd00:0:21::", behavior: End }
+      - { value: "fd00:0:21:a::", behavior: End.AN }
+      - { value: "fd00:0:21:b::", behavior: End.AN }
+      - { value: "fd00:0:21:c::", behavior: End.AN }
+      - { value: "fd00:0:21:d::", behavior: End.AN }
+      - { value: "fd00:0:21:e::", behavior: End.AN }
+  - name: 100G-8KDG-Switcher-2
+    router_id: 10.255.1.2
+    loopback: "fd00:ff::22"
+    sids:
+      - { value: "fd00:0:22::", behavior: End }
+      - { value: "fd00:0:22:a::", behavior: End.AN }
+      - { value: "fd00:0:22:b::", behavior: End.AN }
+      - { value: "fd00:0:22:c::", behavior: End.AN }
+      - { value: "fd00:0:22:d::", behavior: End.AN }
+
+  # Caption VVFs (8K DG only).
+  - name: 100G-8KDG-Caption-1
+    router_id: 10.255.2.1
+    loopback: "fd00:ff::31"
+    sids: [{ value: "fd00:0:31::", behavior: End }, { value: "fd00:0:31:a::", behavior: End.AN }]
+  - name: 100G-8KDG-Caption-2
+    router_id: 10.255.2.2
+    loopback: "fd00:ff::32"
+    sids: [{ value: "fd00:0:32::", behavior: End }, { value: "fd00:0:32:a::", behavior: End.AN }]
+  - name: 100G-8KDG-Caption-3
+    router_id: 10.255.2.3
+    loopback: "fd00:ff::33"
+    sids: [{ value: "fd00:0:33::", behavior: End }, { value: "fd00:0:33:a::", behavior: End.AN }]
+
+  # Color / Transcode / Crop VVFs (converter, 1 stream each).
+  - name: 100G-8KDG-Converter-1
+    router_id: 10.255.3.1
+    loopback: "fd00:ff::41"
+    sids: [{ value: "fd00:0:41::", behavior: End }, { value: "fd00:0:41:a::", behavior: End.AN }]
+  - name: 100G-8KDG-Converter-2
+    router_id: 10.255.3.2
+    loopback: "fd00:ff::42"
+    sids: [{ value: "fd00:0:42::", behavior: End }, { value: "fd00:0:42:a::", behavior: End.AN }]
+  - name: 100G-8KDG-Converter-3
+    router_id: 10.255.3.3
+    loopback: "fd00:ff::43"
+    sids: [{ value: "fd00:0:43::", behavior: End }, { value: "fd00:0:43:a::", behavior: End.AN }]
+
+  # Decaps (egress), one per OUT.
+  - { name: 100G-8KDG-Decap-1, router_id: 10.255.4.1, loopback: "fd00:ff::51", sids: [{ value: "fd00:0:51::", behavior: End.DT6 }] }
+  - { name: 100G-8KDG-Decap-2, router_id: 10.255.4.2, loopback: "fd00:ff::52", sids: [{ value: "fd00:0:52::", behavior: End.DT6 }] }
+  - { name: 100G-8KDG-Decap-3, router_id: 10.255.4.3, loopback: "fd00:ff::53", sids: [{ value: "fd00:0:53::", behavior: End.DT6 }] }
+  - { name: 100G-8KDG-Decap-4, router_id: 10.255.4.4, loopback: "fd00:ff::54", sids: [{ value: "fd00:0:54::", behavior: End.DT6 }] }
+
+# Links (both directions, IGP metric). Headends A / B and the switchers hang off P-1, headends C / D
+# and the decaps off P-2; the VVFs sit on both sides, so which VVF a chain uses changes the path.
+links:
+  - { source: Core-P-1, destination: Core-P-2, metric: 10 }
+  - { source: 100G-8KDG-Encap-A, destination: Core-P-1, metric: 10 }
+  - { source: 100G-8KDG-Encap-B, destination: Core-P-1, metric: 10 }
+  - { source: 100G-8KDG-Encap-C, destination: Core-P-2, metric: 10 }
+  - { source: 100G-8KDG-Encap-D, destination: Core-P-2, metric: 10 }
+  - { source: 100G-8KDG-Switcher-1, destination: Core-P-1, metric: 10 }
+  - { source: 100G-8KDG-Switcher-2, destination: Core-P-1, metric: 10 }
+  - { source: 100G-8KDG-Switcher-2, destination: 100G-8KDG-Switcher-1, metric: 5 }
+  - { source: 100G-8KDG-Caption-1, destination: Core-P-1, metric: 10 }
+  - { source: 100G-8KDG-Caption-2, destination: Core-P-2, metric: 10 }
+  - { source: 100G-8KDG-Caption-3, destination: Core-P-2, metric: 10 }
+  - { source: 100G-8KDG-Converter-1, destination: Core-P-1, metric: 10 }
+  - { source: 100G-8KDG-Converter-2, destination: Core-P-2, metric: 10 }
+  - { source: 100G-8KDG-Converter-3, destination: Core-P-2, metric: 10 }
+  - { source: 100G-8KDG-Decap-1, destination: Core-P-2, metric: 10 }
+  - { source: 100G-8KDG-Decap-2, destination: Core-P-2, metric: 10 }
+  - { source: 100G-8KDG-Decap-3, destination: Core-P-2, metric: 10 }
+  - { source: 100G-8KDG-Decap-4, destination: Core-P-2, metric: 10 }

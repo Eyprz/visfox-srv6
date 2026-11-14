@@ -1,0 +1,301 @@
+@import 'tailwindcss';
+
+/*
+ * VISFOX-SRv6 design tokens.
+ * Light theme with high-saturation state colors. Components must use these tokens
+ * (e.g. bg-exec-active, text-health-warning) instead of raw color codes.
+ */
+@theme {
+  /* Play for Latin letters and digits; glyphs Play lacks (Japanese) fall through to M PLUS 2. */
+  --font-sans: 'Play', 'M PLUS 2', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Surfaces and text */
+  --color-canvas: #f1f5f9;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f8fafc;
+  --color-line: #e2e8f0;
+  --color-line-strong: #cbd5e1;
+  /* Matrix cell slot frame: thicker and darker than general rules so cell boundaries stay clear. */
+  --color-slot: #94a3b8;
+  --color-ink: #0f172a;
+  --color-ink-muted: #475569;
+  --color-ink-subtle: #94a3b8;
+
+  /*
+   * Selected item (top bar navigation, sidebar, segmented toggles): a flush, full-height row,
+   * near-black with white text in light mode and inverted in dark mode. No cards / rounded pills.
+   */
+  --color-selected: #1f2937;
+  --color-on-selected: #ffffff;
+
+  /* Overlay behind dialogs and drawers (fixed dark in both themes). */
+  --color-scrim: rgb(15 23 42 / 0.45);
+
+  /* Primary action (accent) */
+  --color-accent: #7c3aed;
+  --color-accent-strong: #6d28d9;
+  --color-accent-soft: #ede9fe;
+
+  /* Execution state (badges) */
+  --color-exec-active: #e11d48;
+  --color-exec-standby: #16a34a;
+  --color-exec-off: #94a3b8;
+  --color-exec-disconnected: #334155;
+
+  /* Health state (lamps) */
+  --color-health-healthy: #2563eb;
+  --color-health-warning: #f59e0b;
+  --color-health-remediating: #2563eb;
+  --color-health-critical: #dc2626;
+
+  /* Log levels */
+  --color-log-info: #2563eb;
+  --color-log-warn: #d97706;
+  --color-log-error: #dc2626;
+
+  /*
+   * Lamp blinking. 1.2 s cycle: a firm plateau (40% = 0.48 s) in each state,
+   * with short eased transitions (10% = 0.12 s) so the change looks smooth without losing impact.
+   * - CRITICAL: red <-> off (opacity), with a soft glow while lit
+   * - REMEDIATING: blue <-> red (background color)
+   */
+  --animate-blink: lamp-blink 1.2s ease-in-out infinite;
+  --animate-blue-red: lamp-blue-red 1.2s ease-in-out infinite;
+
+  @keyframes lamp-blink {
+    0%,
+    40%,
+    100% {
+      opacity: 1;
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-health-critical) 30%, transparent);
+    }
+    50%,
+    90% {
+      opacity: 0;
+      box-shadow: 0 0 0 0 transparent;
+    }
+  }
+
+  @keyframes lamp-blue-red {
+    0%,
+    40%,
+    100% {
+      background-color: var(--color-health-remediating);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-health-remediating) 30%, transparent);
+    }
+    50%,
+    90% {
+      background-color: var(--color-health-critical);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-health-critical) 30%, transparent);
+    }
+  }
+
+  /*
+   * Matrix cell perimeter for health errors: a 4px ring separated from the cell
+   * by a 3px surface-colored gap (so it stays visible around a red ON AIR cell), blinking with the same
+   * 1.2 s plateau rhythm as the lamps. HEALTHY cells show nothing.
+   */
+  --animate-perimeter-warning: perimeter-warning 1.2s ease-in-out infinite;
+  --animate-perimeter-remediating: perimeter-remediating 1.2s ease-in-out infinite;
+  --animate-perimeter-critical: perimeter-critical 1.2s ease-in-out infinite;
+
+  @keyframes perimeter-warning {
+    0%,
+    40%,
+    100% {
+      box-shadow:
+        0 0 0 3px var(--color-surface),
+        0 0 0 7px var(--color-health-warning);
+    }
+    50%,
+    90% {
+      box-shadow:
+        0 0 0 3px transparent,
+        0 0 0 7px transparent;
+    }
+  }
+
+  @keyframes perimeter-remediating {
+    0%,
+    40%,
+    100% {
+      box-shadow:
+        0 0 0 3px var(--color-surface),
+        0 0 0 7px var(--color-health-remediating);
+    }
+    50%,
+    90% {
+      box-shadow:
+        0 0 0 3px var(--color-surface),
+        0 0 0 7px var(--color-health-critical);
+    }
+  }
+
+  @keyframes perimeter-critical {
+    0%,
+    40%,
+    100% {
+      box-shadow:
+        0 0 0 3px var(--color-surface),
+        0 0 0 7px var(--color-health-critical),
+        0 0 14px 6px color-mix(in srgb, var(--color-health-critical) 40%, transparent);
+    }
+    50%,
+    90% {
+      box-shadow:
+        0 0 0 3px transparent,
+        0 0 0 7px transparent,
+        0 0 14px 6px transparent;
+    }
+  }
+}
+
+/* Long-press progress ring (matrix cell Take on touch). */
+@keyframes long-press {
+  from {
+    stroke-dashoffset: 100;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* DISCONNECTED cell: diagonal hatch. */
+@utility hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in srgb, var(--color-exec-disconnected) 18%, transparent) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+/*
+ * Dark theme (header toggle, <html data-theme="dark">). Provisional palette: same token names, tuned for a
+ * dark background; state colors are slightly brighter to stay distinguishable.
+ */
+@layer base {
+  /*
+   * Stream colors on the topology overview when one VVF node carries several streams. Distinct from
+   * the execution (red / green) and health (amber / red / blue) colors. Plain custom properties, not
+   * theme tokens: they are used through var() only, which Tailwind would otherwise drop.
+   */
+  :root {
+    --color-stream-1: #7c3aed;
+    --color-stream-2: #0891b2;
+    --color-stream-3: #db2777;
+    --color-stream-4: #65a30d;
+    --color-stream-5: #4f46e5;
+    --color-stream-6: #0d9488;
+  }
+
+  :root[data-theme='dark'] {
+    color-scheme: dark;
+    --color-canvas: #0b1120;
+    --color-surface: #111827;
+    --color-surface-muted: #1f2937;
+    --color-line: #273244;
+    --color-line-strong: #374151;
+    --color-slot: #4b5563;
+    --color-ink: #e5e7eb;
+    --color-ink-muted: #9ca3af;
+    --color-ink-subtle: #6b7280;
+
+    --color-selected: #e5e7eb;
+    --color-on-selected: #111827;
+    --color-scrim: rgb(0 0 0 / 0.6);
+
+    --color-stream-1: #a78bfa;
+    --color-stream-2: #22d3ee;
+    --color-stream-3: #f472b6;
+    --color-stream-4: #a3e635;
+    --color-stream-5: #818cf8;
+    --color-stream-6: #2dd4bf;
+
+    --color-accent: #8b5cf6;
+    --color-accent-strong: #7c3aed;
+    --color-accent-soft: #2e1065;
+
+    --color-exec-active: #f43f5e;
+    --color-exec-standby: #22c55e;
+    --color-exec-off: #6b7280;
+    --color-exec-disconnected: #475569;
+
+    --color-health-healthy: #3b82f6;
+    --color-health-warning: #fbbf24;
+    --color-health-remediating: #3b82f6;
+    --color-health-critical: #ef4444;
+
+    --color-log-info: #60a5fa;
+    --color-log-warn: #fbbf24;
+    --color-log-error: #f87171;
+  }
+}
+
+@layer base {
+  :root {
+    /*
+     * Square cell size of the crosspoint matrix (IN headers and crosspoints)
+     * Default / upper bound (FHD baseline). MatrixGrid overrides it at runtime so four rows fit the
+     * available height (OS scaling, browser chrome); larger screens show more rows / columns instead.
+     */
+    --matrix-cell: 12.5rem;
+  }
+}
+
+@layer base {
+  /*
+   * Scale the root font size with the viewport so 4K (3840px) keeps the same density as FHD (1920px):
+   * 16px at <= 1920px, 32px at 3840px. All sizes are rem-based.
+   */
+  html {
+    font-size: clamp(16px, calc(100vw / 120), 32px);
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+  }
+
+  /* Designer links on the IN -> OUT path: dashes move from source to target (the video direction). */
+  .react-flow__edge.video-flow .react-flow__edge-path {
+    stroke-dasharray: 10 6;
+    animation: video-flow 0.8s linear infinite;
+  }
+  @keyframes video-flow {
+    to {
+      stroke-dashoffset: -16;
+    }
+  }
+  /* A STANDBY feed: the video reaches its switcher but goes no further. Finer and slower. */
+  .react-flow__edge.video-standby .react-flow__edge-path {
+    stroke-dasharray: 6 4;
+    animation: video-standby 1.6s linear infinite;
+  }
+  @keyframes video-standby {
+    to {
+      stroke-dashoffset: -10;
+    }
+  }
+
+  /*
+   * Reduced motion stops decorative animations, but not the health alerts (cell perimeter and lamp
+   * blinking): they are warnings the operator must notice, nor the video flow on links: it shows
+   * which path and switcher input carry the video.
+   */
+  @media (prefers-reduced-motion: reduce) {
+    *:not(
+      .animate-perimeter-warning,
+      .animate-perimeter-remediating,
+      .animate-perimeter-critical,
+      .animate-blink,
+      .animate-blue-red,
+      .react-flow__edge.video-flow .react-flow__edge-path,
+      .react-flow__edge.video-standby .react-flow__edge-path
+    ),
+    *::before,
+    *::after {
+      animation-duration: 0s !important;
+      animation-iteration-count: 1 !important;
+    }
+  }
+}

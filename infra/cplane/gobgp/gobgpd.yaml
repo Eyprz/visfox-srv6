@@ -1,0 +1,18 @@
+# GoBGP for the local C-Plane lab: the BGP-LS collector whose RIB feeds Pola's TED (gRPC 50051).
+# Its neighbors are the routers that advertise BGP-LS (afi-safi ls). In the lab the stand-in BGP-LS
+# speaker (infra/cplane/fakebgpls, 172.31.77.4) advertises the lab network's TED over iBGP; Pola
+# follows routes received from peers (adj-in), not routes added to GoBGP's own RIB.
+global:
+  config:
+    as: 65000
+    router-id: "172.31.77.3"
+neighbors:
+  - config:
+      neighbor-address: "172.31.77.4"
+      peer-as: 65000
+    transport:
+      config:
+        passive-mode: true
+    afi-safis:
+      - config:
+          afi-safi-name: ls

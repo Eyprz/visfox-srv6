@@ -1,0 +1,22 @@
+# PolaPCE (polad) for the local C-Plane lab. PCEP listens on the lab network; the IEL reaches the
+# gRPC API at visfox_polad:50052. The TED comes from GoBGP (BGP-LS); it stays empty until a router
+# feeds GoBGP, and the IEL installs explicit paths without SID validation meanwhile.
+global:
+  pcep:
+    address: "172.31.77.2"
+    port: 4189
+  grpcServer:
+    address: "172.31.77.2"
+    port: 50052
+  log:
+    path: "/var/log/pola/"
+    name: "polad.log"
+  ted:
+    enable: true
+    source: "gobgp"
+    asn: 65000
+  gobgp:
+    grpcClient:
+      address: "172.31.77.3"
+      port: 50051
+  usidMode: false

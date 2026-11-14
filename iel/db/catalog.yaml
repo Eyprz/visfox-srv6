@@ -1,0 +1,105 @@
+# VVF catalog and domain policy. VISFOX knowledge the C-Plane does not
+# advertise: which functions each VVF (SRv6 End.AN) offers, how they may be placed in a chain, their
+# parameters, and the formats of the single SRv6 SFC domain. Read once at startup (-catalog /
+# VISFOX_CATALOG) and served by GET /presets/constraints and GET /functions.
+#
+# The VVF ids are the ones the SID interpretation rule assigns to TED nodes (config/operator.yaml).
+# behavior: process (default) VVFs offer the functions of a chain; select / replicate VVFs control the
+# stream flow (switchers, branches) and offer none.
+# allocation: dynamic VVFs have interchangeable nodes that the IEL assigns whenever streams are
+# allocated; pinned VVFs have nodes that differ (e.g. the material a caption node burns in), so a
+# preset names the node of each function (vvf_node_id) and GET /presets/constraints lists the nodes.
+# Text is English.
+
+constraints:
+  topology: linear
+  allow_loops: false
+  min_functions: 0
+  vvfs:
+    - id: vvf-caption
+      name: Caption
+      function_types: [caption]
+      require_all: true
+      contiguous: true
+      ordered: false
+      allocation: pinned
+    # function_types is the execution order the End.AN requires; the IEL reorders chains into it.
+    - id: vvf-color-transcode-crop
+      name: Color / Transcode / Crop
+      function_types: [transcode, crop, color]
+      require_all: true
+      contiguous: true
+      ordered: false
+      allocation: dynamic
+    # VVFs that control the stream flow (behavior select / replicate): no functions; the IEL places
+    # them on the way of the streams. A switcher selects one of the streams on its input ports per
+    # output (the Take); a replicator sends copies of one stream to several places (RFC 9524).
+    - id: vvf-switcher
+      name: Switcher
+      behavior: select
+      function_types: []
+      require_all: false
+      contiguous: false
+      ordered: false
+      allocation: dynamic
+    - id: vvf-replicator
+      name: Replicator
+      behavior: replicate
+      function_types: []
+      require_all: false
+      contiguous: false
+      ordered: false
+      allocation: dynamic
+  # Every IN is 8K DG and every OUT expects 8K FULL; every stream passes a switcher.
+  domain:
+    source_format: { video_format: 8k_dg }
+    destination_format: { video_format: 8k_full }
+    switcher_required: true
+
+functions:
+  - type: caption
+    name: Caption
+    description: Overlay a caption on the video (8K DG only)
+    vvf_id: vvf-caption
+    default_params: { text: LIVE, position: bottom }
+    # The caption node only takes 8K DG (before transcode) and keeps it.
+    format_transitions: { video_format: { 8k_dg: 8k_dg } }
+    param_schema:
+      type: object
+      required: [text, position]
+      properties:
+        text: { type: string, maxLength: 64 }
+        position: { type: string, enum: [top, bottom] }
+
+  - type: transcode
+    name: Transcode (8K DG to 8K FULL)
+    description: Convert 8K DG to 8K FULL
+    vvf_id: vvf-color-transcode-crop
+    default_params: {}
+    format_transitions: { video_format: { 8k_dg: 8k_full } }
+    param_schema: { type: object, properties: {} }
+
+  - type: crop
+    name: Crop
+    description: Cut an FHD region out of the 8K main stream as a side output (main stream unchanged)
+    vvf_id: vvf-color-transcode-crop
+    default_params: { x: 2880, y: 1620 }
+    param_schema:
+      type: object
+      required: [x, y]
+      properties:
+        x: { type: integer, minimum: 0, maximum: 5760, description: Top-left X of the FHD region (8K coordinates) }
+        y: { type: integer, minimum: 0, maximum: 3240, description: Top-left Y of the FHD region (8K coordinates) }
+
+  - type: color
+    name: Color
+    description: Real-time RGB color modulation
+    vvf_id: vvf-color-transcode-crop
+    default_params: { r: 0, g: 0, b: 0 }
+    param_schema:
+      type: object
+      required: [r, g, b]
+      properties:
+        r: { type: integer, minimum: -255, maximum: 255 }
+        g: { type: integer, minimum: -255, maximum: 255 }
+        b: { type: integer, minimum: -255, maximum: 255 }

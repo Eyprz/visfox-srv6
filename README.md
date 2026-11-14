@@ -33,6 +33,29 @@ assures them.
   after each southbound instruction, that no picture breaks, and compares every refusal with an
   exhaustive oracle of the possible allocations.
 
+## Screenshots
+
+Taken on the lab network of the Quick start (TED from BGP-LS, SR Policies through PolaPCE).
+
+**Crosspoint matrix.** Each cell is an intent: the preset an IN carries to an OUT, ON AIR or STANDBY.
+The inspector shows the selected cell and takes it on air.
+
+![Crosspoint matrix with the crosspoint inspector](docs/images/matrix.png)
+
+**SFC designer.** A preset is a logical chain of functions; functions that share one VVF are grouped and
+placed together. The IEL validates the chain.
+
+![SFC designer](docs/images/designer.png)
+
+**Topology overview.** Sources, VVFs and destinations, with the paths of the cells on air.
+
+![Topology overview](docs/images/topology.png)
+
+**Real path of a cell.** The service chain path and, read only, the Segment List and SIDs the IEL
+installed through PolaPCE.
+
+![Real path of a cell](docs/images/path.png)
+
 ## Architecture
 
 ```mermaid

@@ -13,7 +13,8 @@ the network. Its views:
 - **Crosspoint matrix.** Each cell (IN x OUT) is an intent: which preset (service chain) the input carries
   to the output, and whether it is ON AIR or waits in STANDBY. A Take puts a STANDBY cell on air.
 - **SFC designer.** Presets are logical chains of video functions (caption, color, transcode, crop) built
-  on a React Flow canvas. Chain rules (VVF bundles, execution order, formats) come from the IEL.
+  on a React Flow canvas. Chain rules come from the IEL: which functions share one VVF (Virtual Video
+  processing Function) and must be placed together, their execution order, and the video formats.
 - **Live parameters.** Function parameters change while on air, about every 100 ms.
 - **Topology and real path.** The L7 topology, the path a cell takes, and per-hop diagnostics read from
   the IEL.
@@ -64,7 +65,8 @@ wiring of the switcher inputs, and the limits of every resource.
 
 ### Video functions, switchers and resource pools
 
-Video functions run on **VVFs** (Virtual Video Functions, SR-aware End.AN functions). A VVF's `behavior`
+Video functions run on **VVFs** (Virtual Video processing Functions): SR-aware (End.AN) functions that
+process the video streams on the SRv6 network. A VVF's `behavior`
 says what it does with streams:
 
 - `process`: processes one stream (caption, color / transcode / crop);

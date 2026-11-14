@@ -6,7 +6,7 @@ keeps its own SSoT (database) and presets.
 
 | `VISFOX_NETWORK` | TED source | Operator config | Network |
 | :--- | :--- | :--- | :--- |
-| (unset) | `iel/db/ted.yaml` | `iel/config/operator.yaml` | The testbed: 4 INs, 4 OUTs, two cascaded switchers (3 inputs each), 3 caption and 3 converter VVFs, one stream per headend, hot standby |
+| (unset) | `iel/db/ted.yaml` | `iel/config/operator.yaml` | The testbed: 4 INs, 4 OUTs, two cascaded switchers (3 inputs each), 3 caption and 3 converter VVFs (Virtual Video processing Functions), one stream per headend, hot standby |
 | `rich` | `iel/db/ted-rich.yaml` | `iel/config/operator-rich.yaml` | Plenty of resources: one switcher per OUT receiving every IN, 8 converters, 4 captions, no headend limit |
 | `lab` | BGP-LS from GoBGP (`iel/db/ted-lab.yaml` is what the lab advertises) | `iel/config/operator-lab.yaml` | The testbed's composition on structured RFC 8986 SIDs with core routers; the TED is shared with PolaPCE, which validates the SIDs |
 

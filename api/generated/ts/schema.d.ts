@@ -801,7 +801,7 @@ export interface components {
             links: components["schemas"]["TopologyLink"][];
         };
         /**
-         * @description Video function type. Functions are components of a VVF (Virtual Video Function), an SRv6 End.AN;
+         * @description Video function type. Functions are components of a VVF (Virtual Video processing Function), an SRv6 End.AN;
          *     the types that can be placed are decided by the TED (`vvfs` of `GET /functions` / `GET /presets/constraints`).
          *     - color: color modulation (RGB adjustment)
          *     - caption: caption insertion
@@ -943,7 +943,7 @@ export interface components {
             switcher_required?: boolean;
         };
         /**
-         * @description VVF (Virtual Video Function): a video function unit working as one SRv6 End.AN (static TED config).
+         * @description VVF (Virtual Video processing Function): a video function unit working as one SRv6 End.AN (static TED config).
          *     The functions of a VVF with several functions must be placed together in the chain.
          *     With `ordered: false` the Application Layer may place them in any order; the IEL reorders them into the
          *     order the End.AN requires (internal) before handing them southbound.

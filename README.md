@@ -5,8 +5,11 @@
 VISFOX-SRv6 lets video operators run live 8K video over an SRv6 network by saying *what* they want,
 not *how* to forward it. An operator picks which input goes to which output and which video functions
 (caption, color, transcode, crop) it passes through. VISFOX turns that intent into SRv6 Service
-Function Chains (SFC), places them on the network's Virtual Video Functions (VVFs) and switchers,
-installs the SR Policies through a PCE, and keeps checking that the network still matches the intent.
+Function Chains (SFC) and places them on the network's VVFs. A **VVF (Virtual Video processing
+Function)** is a video function on the SRv6 network that handles SRv6 itself (SR-aware, End.AN): it
+processes the stream (caption, color conversion, ...) or, as a switcher VVF, selects one of several
+streams. VISFOX then installs the SR Policies through a PCE and keeps checking that the network still
+matches the intent.
 
 It follows the Intent-Based Networking reference model of [RFC 9315](https://www.rfc-editor.org/rfc/rfc9315):
 an Application Layer where intents are expressed, and an Intent-Enabled Layer (IEL) that fulfills and
@@ -50,7 +53,7 @@ flowchart TB
     end
     subgraph DP["SRv6 domain"]
         HE["Headends (PCEP)"]
-        VVF["VVFs (End.AN) and switchers"]
+        VVF["VVFs: Virtual Video processing Functions<br/>(End.AN, switcher VVFs)"]
         DC["Decap"]
     end
     UI -- "REST / SSE (OpenAPI)" --> ING

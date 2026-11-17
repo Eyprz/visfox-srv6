@@ -1547,8 +1547,9 @@ export interface components {
         DynamicConfig: {
             /**
              * @description Interval of the continuous Intent Assurance: the IEL reads the SR Policies (PCE) and the input selections of the
-             *     switcher VVFs back from the network and compares them with the SSoT. 0 = only at startup
-             * @example 30
+             *     switcher VVFs back from the network and compares them with the SSoT. 0 = only at startup. Default 3 (live video:
+             *     drift must be found within seconds)
+             * @example 3
              */
             assurance_interval_s: number;
             drift_action: components["schemas"]["DriftAction"];

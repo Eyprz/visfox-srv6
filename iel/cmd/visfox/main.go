@@ -109,7 +109,8 @@ func run() error {
 	var readTED func(context.Context) (*ssot.Resources, error)
 	var saveTED func(context.Context, domain.TED) error
 	if op.TED.Source == config.TEDGoBGP {
-		follow := bgpls.Source{Target: op.TED.GoBGP, Wait: 20 * time.Second}
+		// A pass runs every few seconds: read the RIB twice 0.5 s apart to see it is stable.
+		follow := bgpls.Source{Target: op.TED.GoBGP, Wait: 10 * time.Second, Poll: 500 * time.Millisecond}
 		readTED = func(ctx context.Context) (*ssot.Resources, error) {
 			dev, err := follow.Load(ctx)
 			if err != nil {
@@ -142,7 +143,7 @@ func run() error {
 		},
 		DefaultConfig: apitypes.DynamicConfig{
 			SseIntervalMs: 1000, MetricsDumpIntervalS: 30, LogLevel: apitypes.LogLevel(strings.ToLower(cfg.LogLevel.String())),
-			AssuranceIntervalS: 30, DriftAction: apitypes.DriftActionRepair,
+			AssuranceIntervalS: 3, DriftAction: apitypes.DriftActionRepair,
 		},
 		OnLogLevel: func(l apitypes.LogLevel) {
 			var lv slog.Level

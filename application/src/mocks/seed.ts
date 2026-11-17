@@ -379,6 +379,6 @@ export const defaultDynamicConfig: DynamicConfig = {
   sse_interval_ms: 1000,
   metrics_dump_interval_s: 30,
   log_level: 'info',
-  assurance_interval_s: 30,
+  assurance_interval_s: 3,
   drift_action: 'repair',
 }

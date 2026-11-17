@@ -954,10 +954,11 @@ type DriftAction string
 // DynamicConfig Non-critical settings changeable at runtime from the GUI / REST
 type DynamicConfig struct {
 	// AssuranceIntervalS Interval of the continuous Intent Assurance: the IEL reads the SR Policies (PCE) and the input selections of the
-	// switcher VVFs back from the network and compares them with the SSoT. 0 = only at startup
+	// switcher VVFs back from the network and compares them with the SSoT. 0 = only at startup. Default 3 (live video:
+	// drift must be found within seconds)
 	//
 	//
-	// Example: 30
+	// Example: 3
 	AssuranceIntervalS int `json:"assurance_interval_s"`
 
 	// DefaultSla Not used in v1 (for SLA evaluation in v2)

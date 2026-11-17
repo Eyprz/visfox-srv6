@@ -199,6 +199,7 @@ func (s *env) run(ctx context.Context, cellID string, ins []domain.Instruction) 
 	for _, in := range ins {
 		s.log(apitypes.LogLevelInfo, "southbound: "+in.Describe(), cellID, "")
 	}
+	s.gen++
 	err := s.orch.Provision(ctx, ins)
 	if err == nil {
 		s.orch.Remember(ins)

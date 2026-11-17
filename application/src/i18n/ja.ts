@@ -55,6 +55,13 @@ export const ja: Record<MessageKey, string> = {
   'settings.dumpIntervalHint': 'メトリクスを SQLite に保存する周期。10 秒以上。',
   'settings.logLevel': 'IEL のログレベル',
   'settings.logLevelHint': 'IEL が記録し、ログバーへ送る最低レベル。',
+  'settings.assuranceInterval': 'Assurance の間隔 (s)',
+  'settings.assuranceIntervalHint':
+    'IEL が SR Policy とスイッチャーの入力を読み戻し、インテントと照らし合わせる周期。0 は起動時だけ。',
+  'settings.driftAction': 'ずれを見つけたとき',
+  'settings.driftActionHint': 'ネットワークがインテントとずれたときに IEL がすること。',
+  'settings.driftAction.repair': '修復する（インテントどおりに入れ直す）',
+  'settings.driftAction.report': '報告だけ（セルが黄色になる）',
   'settings.immutable': '起動時の設定（読み取り専用）',
   'settings.immutableHint':
     'IEL のコマンドライン引数または環境変数で決まります。変更するにはそちらを変えて IEL を再起動してください。',

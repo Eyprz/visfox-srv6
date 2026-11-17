@@ -3,7 +3,8 @@
 # from BGP-LS (GoBGP), shared with PolaPCE. Needs the cplane profile.
 
 # TED source: seed (default) = the static TED file (VISFOX_TED_SEED); gobgp = the BGP-LS RIB of
-# GoBGP (what infra/cplane/fakebgpls advertises from db/ted-lab.yaml), read once at startup.
+# GoBGP (what infra/cplane/fakebgpls advertises from db/ted-lab.yaml), read at startup and
+# again on every assurance pass (assurance_interval_s) to follow changes.
 ted:
   source: gobgp
   gobgp: "172.31.77.3:50051"
@@ -21,7 +22,7 @@ sid_rule:
     - { match: converter, role: vvf, vvf_id: vvf-color-transcode-crop, id_prefix: color-transcode-crop, label: "Color / Transcode / Crop #{n}" }
     - { match: decap, role: decap, id_prefix: decap, label: "Decap {n}" }
 
-# Display names that replace the rule's label (host name -> name). Pinned VVF nodes need one that
+# Display names that replace the rule's label (host name or router id -> name). Pinned VVF nodes need one that
 # tells them apart, e.g. the material a caption node burns in. Names only: no manual id binding.
 labels:
   100G-8KDG-Caption-1: "Caption: Logo"
@@ -80,6 +81,12 @@ orchestrator:
     asn: 65000
     # Pola's TED is the IEL's (both from BGP-LS): let it check the SIDs of every Segment List.
     sid_validate: true
+    # explicit: Pola installs the IEL's Segment Lists (the IGP routes between their SIDs). dynamic:
+    # Pola computes every path that reaches its endpoint, through the IEL's SIDs as waypoints
+    # (VISFOX_PCE_PATH=dynamic); Pola then needs the node-SID feed (VISFOX_POLA_TED=node) and does
+    # not check SIDs. STANDBY feeds stay explicit.
+    path: explicit
+    metric: igp
   # PCEP session (PCC) and SRv6 address of every headend, SRv6 address of the policy endpoints (the
   # loopbacks advertised in db/ted-lab.yaml).
   nodes:
@@ -93,3 +100,5 @@ orchestrator:
     100G-8KDG-Decap-4: { address: "fd00:ff::54" }
   color_base: 100
   vvf_settle_ms: 0
+  # Wait at a Take that starts a stream not flowing yet (cold standby), before the switch.
+  stream_settle_ms: 1000

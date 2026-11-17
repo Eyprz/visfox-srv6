@@ -68,7 +68,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	if err := op.Override(cfg.SRPolicyDriver, cfg.VVFDriver, cfg.DryRun); err != nil {
+	if err := op.Override(cfg.SRPolicyDriver, cfg.VVFDriver, cfg.PCEPath, cfg.DryRun); err != nil {
 		return err
 	}
 	var src ted.Source = ted.SeedFile{Path: cfg.TEDSeedPath}
@@ -105,7 +105,26 @@ func run() error {
 		logger.Info("presets seeded", "source", cfg.PresetsSeedPath, "presets", len(seed.Presets))
 	}
 
-	prov, mon, closeSBI, err := newProvisioner(op.Orchestrator, res, cfg.RouterTimeout, logger)
+	// A TED learned over BGP-LS is followed while the IEL runs (every assurance pass).
+	var readTED func(context.Context) (*ssot.Resources, error)
+	var saveTED func(context.Context, domain.TED) error
+	if op.TED.Source == config.TEDGoBGP {
+		follow := bgpls.Source{Target: op.TED.GoBGP, Wait: 20 * time.Second}
+		readTED = func(ctx context.Context) (*ssot.Resources, error) {
+			dev, err := follow.Load(ctx)
+			if err != nil {
+				return nil, err
+			}
+			t, err := ted.Interpret(dev, op.SIDRule, op.Bindings())
+			if err != nil {
+				return nil, err
+			}
+			return ssot.NewResources(t, catalog.Constraints.Vvfs, op.Wiring, op.Limits)
+		}
+		saveTED = func(ctx context.Context, t domain.TED) error { return ted.Save(ctx, store, t) }
+	}
+
+	prov, mon, switches, closeSBI, err := newProvisioner(op.Orchestrator, res, cfg.RouterTimeout, logger)
 	if err != nil {
 		return err
 	}
@@ -115,13 +134,15 @@ func run() error {
 	go events.RunHeartbeat(ctx)
 	uc, err := usecase.New(ctx, usecase.Options{
 		Store: st, Resources: res, Catalog: catalog, Publisher: events, Logger: logger,
-		Provisioner: prov, Monitor: mon, Arg: op.SIDRule.Arg, ColorBase: op.Orchestrator.ColorBase,
+		Provisioner: prov, Monitor: mon, Switches: switches, ReadTimeout: cfg.RouterTimeout,
+		ReadTED: readTED, SaveTED: saveTED, Arg: op.SIDRule.Arg, ColorBase: op.Orchestrator.ColorBase,
 		Immutable: apitypes.ImmutableConfig{
 			ListenAddr: cfg.ListenAddr, DbPath: cfg.DBPath, RouterTimeoutMs: int(cfg.RouterTimeout.Milliseconds()),
 			SeedPath: &srcName,
 		},
 		DefaultConfig: apitypes.DynamicConfig{
 			SseIntervalMs: 1000, MetricsDumpIntervalS: 30, LogLevel: apitypes.LogLevel(strings.ToLower(cfg.LogLevel.String())),
+			AssuranceIntervalS: 30, DriftAction: apitypes.DriftActionRepair,
 		},
 		OnLogLevel: func(l apitypes.LogLevel) {
 			var lv slog.Level
@@ -133,6 +154,8 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	go assure(ctx, uc.AssureNetwork)
 
 	e := nbi.New(logger, started, uc, events)
 	logger.Info("starting IEL", "listen", cfg.ListenAddr)
@@ -163,9 +186,9 @@ func openDB(ctx context.Context, path string) (*sql.DB, error) {
 // newProvisioner builds the SFC Provisioner clients from the network operator config: SR Policies go
 // to PolaPCE (PCE NBI client) and VVF control (the input selection of switchers, the configs of
 // process VVFs) to the routers' MGMT REST API (VVF control client), or either is dry-run (logged).
-// With PolaPCE the PCE client is also the monitor Intent Assurance reads the SR Policies from (nil
-// when dry-run).
-func newProvisioner(oc config.Orchestrator, res *ssot.Resources, timeout time.Duration, logger *slog.Logger) (*provision.Provisioner, monitor.SRPolicySource, func(), error) {
+// With PolaPCE the PCE client is also the monitor Intent Assurance reads the SR Policies from, with
+// mgmt the VVF control client the one it reads the switcher inputs from (nil when dry-run).
+func newProvisioner(oc config.Orchestrator, res *ssot.Resources, timeout time.Duration, logger *slog.Logger) (*provision.Provisioner, monitor.SRPolicySource, monitor.SwitcherSource, func(), error) {
 	dry := dryrun.Client{Log: func(m string) { logger.Info(m) }}
 	drivers := map[domain.Op]provision.Driver{
 		domain.OpSRPolicySet: dry, domain.OpSRPolicyDelete: dry,
@@ -184,26 +207,46 @@ func newProvisioner(oc config.Orchestrator, res *ssot.Resources, timeout time.Du
 	}
 	closer := func() {}
 	var mon monitor.SRPolicySource
+	var switches monitor.SwitcherSource
 	if oc.SRPolicy == config.DriverPolaPCE {
 		addrs := map[string]pce.NodeAddress{}
 		for host, a := range oc.Nodes {
 			id, err := nodeID(host)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			var na pce.NodeAddress
 			na.PCEPPeer, _ = netip.ParseAddr(a.PCEPPeer)
 			na.Address, _ = netip.ParseAddr(a.Address)
 			addrs[id] = na
 		}
-		pola, err := pce.New(oc.PolaPCE.Address, oc.PolaPCE.ASN, oc.PolaPCE.SIDValidate, addrs)
+		opts := pce.Options{ASN: oc.PolaPCE.ASN, Validate: oc.PolaPCE.SIDValidate, Nodes: addrs,
+			Dynamic: oc.PolaPCE.Path == config.PathDynamic}
+		if opts.Dynamic {
+			metric, err := pce.MetricType(oc.PolaPCE.Metric)
+			if err != nil {
+				return nil, nil, nil, nil, err
+			}
+			// Waypoints name the router of every SID; Pola's TED knows the routers by router id.
+			opts.Metric, opts.Routers = metric, map[string]string{}
+			for _, n := range res.TED.Nodes {
+				if n.RouterID == "" {
+					continue
+				}
+				opts.Routers[n.ID] = n.RouterID
+				for _, sid := range n.SIDs {
+					opts.Routers[sid] = n.RouterID
+				}
+			}
+		}
+		pola, err := pce.New(oc.PolaPCE.Address, opts)
 		if err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		drivers[domain.OpSRPolicySet], drivers[domain.OpSRPolicyDelete] = pola, pola
 		closer = func() { _ = pola.Close() }
 		mon = pola
-		logger.Info("SR Policies go to PolaPCE", "address", oc.PolaPCE.Address)
+		logger.Info("SR Policies go to PolaPCE", "address", oc.PolaPCE.Address, "path", oc.PolaPCE.Path)
 	} else {
 		logger.Info("SR Policies are dry-run (logged)")
 	}
@@ -215,17 +258,38 @@ func newProvisioner(oc config.Orchestrator, res *ssot.Resources, timeout time.Du
 			}
 			id, err := nodeID(host)
 			if err != nil {
-				return nil, nil, nil, err
+				return nil, nil, nil, nil, err
 			}
 			mgmt[id] = a.MGMT
 		}
 		ctl := vvf.New(mgmt, nil)
 		drivers[domain.OpSwitcherSelect], drivers[domain.OpFunctionSetParams] = ctl, ctl
+		switches = ctl
 		logger.Info("VVF control goes to the routers' MGMT REST API", "nodes", len(mgmt))
 	} else {
 		logger.Info("VVF control is dry-run (logged)")
 	}
 	return provision.New(provision.Options{
 		Drivers: drivers, Timeout: timeout, Settle: time.Duration(oc.VVFSettleMs) * time.Millisecond,
-	}), mon, closer, nil
+		StreamSettle: time.Duration(oc.StreamSettleMs) * time.Millisecond,
+	}), mon, switches, closer, nil
+}
+
+// assure runs Intent Assurance every assurance_interval_s (dynamic config). It checks the setting
+// every second, so that a change from the GUI takes effect at once; 0 pauses it.
+func assure(ctx context.Context, a usecase.AssureNetwork) {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	last := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-tick.C:
+			if every := a.Interval(); every > 0 && now.Sub(last) >= every {
+				a.Run(ctx)
+				last = time.Now()
+			}
+		}
+	}
 }

@@ -1173,7 +1173,7 @@ export interface components {
         FieldError: {
             /** @example params.r */
             field?: string;
-            /** @example must be between -255 and 255 */
+            /** @example must be between -1024 and 1008 */
             message: string;
         };
         PresetLayout: {
@@ -1206,6 +1206,14 @@ export interface components {
          * @enum {string}
          */
         ExecutionState: "active" | "standby" | "off" | "disconnected";
+        /**
+         * @description What Intent Assurance does when the network drifted from the SSoT (at startup and on every assurance interval):
+         *     - repair: provision the SSoT again for the OUTs that drifted (closed loop; health `remediating`, then `healthy`, or `critical` if it fails)
+         *     - report: only report it (the ON AIR cells of those OUTs turn `warning` until the network matches again; operation log)
+         * @example repair
+         * @enum {string}
+         */
+        DriftAction: "repair" | "report";
         /**
          * @description - healthy (blue): SLA kept (in sync)
          *     - warning (yellow): minor error / intent drift
@@ -1538,6 +1546,13 @@ export interface components {
         /** @description Non-critical settings changeable at runtime from the GUI / REST */
         DynamicConfig: {
             /**
+             * @description Interval of the continuous Intent Assurance: the IEL reads the SR Policies (PCE) and the input selections of the
+             *     switcher VVFs back from the network and compares them with the SSoT. 0 = only at startup
+             * @example 30
+             */
+            assurance_interval_s: number;
+            drift_action: components["schemas"]["DriftAction"];
+            /**
              * @description Interval of SSE telemetry_update
              * @example 1000
              */
@@ -1553,6 +1568,8 @@ export interface components {
         };
         /** @description Only the items to change */
         DynamicConfigPatch: {
+            assurance_interval_s?: number;
+            drift_action?: components["schemas"]["DriftAction"];
             sse_interval_ms?: number;
             metrics_dump_interval_s?: number;
             /** @description Not used in v1 (for SLA evaluation in v2) */
@@ -1663,10 +1680,12 @@ export interface components {
          *     - preset_changed: a preset was created, updated or deleted
          *     - config_changed: dynamic settings changed
          *     - switcher_update: a switcher's active input changed (Take, ...)
+         *     - topology_changed: the TED changed while the IEL runs (BGP-LS): sources, destinations, switchers, pools,
+         *       topology and pinned VVF nodes may differ; the IEL planned the streams again
          *     - log: system log
          *     - heartbeat: keep-alive (when no other event for 15 seconds)
          */
-        SseEvent: components["schemas"]["MatrixUpdateEvent"] | components["schemas"]["TelemetryUpdateEvent"] | components["schemas"]["RollbackEvent"] | components["schemas"]["PresetChangedEvent"] | components["schemas"]["ConfigChangedEvent"] | components["schemas"]["SwitcherUpdateEvent"] | components["schemas"]["LogEvent"] | components["schemas"]["HeartbeatEvent"];
+        SseEvent: components["schemas"]["MatrixUpdateEvent"] | components["schemas"]["TelemetryUpdateEvent"] | components["schemas"]["RollbackEvent"] | components["schemas"]["PresetChangedEvent"] | components["schemas"]["ConfigChangedEvent"] | components["schemas"]["SwitcherUpdateEvent"] | components["schemas"]["TopologyChangedEvent"] | components["schemas"]["LogEvent"] | components["schemas"]["HeartbeatEvent"];
         MatrixUpdateEvent: {
             /**
              * @description discriminator enum property added by openapi-typescript
@@ -1707,6 +1726,17 @@ export interface components {
             action: "created" | "updated" | "deleted";
             /** @example preset-caption-color */
             preset_id: string;
+        };
+        TopologyChangedEvent: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "topology_changed";
+            /** @description TED node ids that appeared */
+            added: string[];
+            /** @description TED node ids that disappeared (streams through them were planned again) */
+            removed: string[];
         };
         ConfigChangedEvent: {
             /**

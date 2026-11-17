@@ -17,7 +17,7 @@ sid_rule:
     - { match: converter, role: vvf, vvf_id: vvf-color-transcode-crop, id_prefix: color-transcode-crop, label: "Color / Transcode / Crop #{n}" }
     - { match: decap, role: decap, id_prefix: decap, label: "Decap {n}" }
 
-# Display names that replace the rule's label (host name -> name). Pinned VVF nodes need one that
+# Display names that replace the rule's label (host name or router id -> name). Pinned VVF nodes need one that
 # tells them apart, e.g. the material a caption node burns in. Names only: no manual id binding.
 labels:
   100G-8KDG-Caption-1: "Caption: Logo"
@@ -90,3 +90,5 @@ orchestrator:
   color_base: 100
   # Wait after the VVF configs of a Take, before the switch.
   vvf_settle_ms: 0
+  # Wait at a Take that starts a stream not flowing yet (cold standby), before the switch.
+  stream_settle_ms: 1000

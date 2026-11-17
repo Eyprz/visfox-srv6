@@ -30,6 +30,7 @@ const EVENT_TYPES: SseEventType[] = [
   'preset_changed',
   'config_changed',
   'switcher_update',
+  'topology_changed',
   'log',
   'heartbeat',
 ]
@@ -87,11 +88,26 @@ export function applySnapshot(s: Snapshot): void {
   useSwitchersStore.getState().setSwitchers(s.switchers)
 }
 
+/** Reloads what the TED determines (INs / OUTs, switchers, catalog with pinned VVF nodes). */
+export async function reloadTopology(): Promise<void> {
+  const [sources, destinations, switchers, catalog, constraints] = await Promise.all([
+    request(api.GET('/resources/sources')),
+    request(api.GET('/resources/destinations')),
+    request(api.GET('/resources/switchers')),
+    request(api.GET('/functions')),
+    request(api.GET('/presets/constraints')),
+  ])
+  useResourcesStore.getState().setResources(sources, destinations)
+  useSwitchersStore.getState().setSwitchers(switchers)
+  usePresetsStore.getState().setCatalog(catalog, constraints)
+}
+
 /** Routes one SSE event to the stores. */
 export async function dispatchSseEvent(
   event: SseEvent,
   fetchPreset: (id: string) => Promise<Preset> = (id) =>
     request(api.GET('/presets/{presetId}', { params: { path: { presetId: id } } })),
+  reload: () => Promise<void> = reloadTopology,
 ): Promise<void> {
   switch (event.type) {
     case 'matrix_update':
@@ -109,6 +125,10 @@ export async function dispatchSseEvent(
       break
     case 'switcher_update':
       useSwitchersStore.getState().applyStates(event.switchers)
+      break
+    case 'topology_changed':
+      // The TED changed (BGP-LS): the cells come with matrix_update, the rest is reloaded.
+      await reload()
       break
     case 'log':
       useLogsStore.getState().addEntry(event.log)

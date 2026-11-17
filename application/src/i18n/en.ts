@@ -62,6 +62,13 @@ export const en = {
   'settings.dumpIntervalHint': 'How often metrics are saved to SQLite. 10 s or more.',
   'settings.logLevel': 'IEL log level',
   'settings.logLevelHint': 'Lowest level the IEL records and sends to the log bar.',
+  'settings.assuranceInterval': 'Assurance interval (s)',
+  'settings.assuranceIntervalHint':
+    'How often the IEL reads the SR Policies and switcher inputs back and compares them with the intents. 0 = only at startup.',
+  'settings.driftAction': 'On drift',
+  'settings.driftActionHint': 'What the IEL does when the network no longer matches the intents.',
+  'settings.driftAction.repair': 'Repair (provision the intents again)',
+  'settings.driftAction.report': 'Report only (cell turns yellow)',
   'settings.immutable': 'Startup settings (read only)',
   'settings.immutableHint':
     'Set by IEL command-line flags or environment variables. Change them there and restart the IEL.',

@@ -91,6 +91,21 @@ func TestInterpretDerivesRolesIDsAndLabels(t *testing.T) {
 	}
 }
 
+func TestInterpretLabelsByHostNameOrRouterID(t *testing.T) {
+	s := testSeed()
+	s.Nodes[2].RouterID = "10.0.2.2" // Caption-2
+	ted := interpretSeed(t, s, Bindings{Labels: map[string]string{
+		"10.0.2.2":  "Caption B",
+		"Caption-1": "Caption A",
+	}})
+	if got := nodeByID(t, ted, "caption-fd77-bb").Label; got != "Caption B" {
+		t.Errorf("label by router id = %q", got)
+	}
+	if got := nodeByID(t, ted, "caption-fd77-ba").Label; got != "Caption A" {
+		t.Errorf("label by host name = %q", got)
+	}
+}
+
 func TestInterpretSwitcherInputsUseSIDRank(t *testing.T) {
 	sw := nodeByID(t, interpretSeed(t, testSeed(), Bindings{}), "sw-fd77-a")
 	want := []domain.InputPort{
@@ -134,6 +149,8 @@ func TestInterpretErrors(t *testing.T) {
 		"unknown rule":  {testSeed(), Rule{Name: "other"}, Bindings{}, "unknown SID interpretation rule"},
 		"duplicate SID": {dup, testRule, Bindings{}, "advertised by both"},
 		"missing node":  {testSeed(), testRule, Bindings{Destinations: []Binding{{ID: "out-1", Node: "Nope"}}}, "not in the TED"},
+		"unknown label": {testSeed(), testRule, Bindings{Labels: map[string]string{"10.9.9.9": "x"}}, "no such host name or router id"},
+		"label twice":   {testSeed(), testRule, Bindings{Labels: map[string]string{"Encap-A": "x", "10.0.0.1": "y"}}, "twice"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

@@ -47,6 +47,16 @@ docker compose exec visfox_polad pola ted --host 172.31.77.2 -p 50052
 docker compose exec visfox_gobgpd gobgp neighbor
 ```
 
+To let PolaPCE compute the paths (dynamic, see [architecture](architecture.md#southbound)), add
+`VISFOX_PCE_PATH=dynamic VISFOX_POLA_TED=node`. A second stand-in speaker (`visfox_bgpls_node`, 172.31.77.6,
+`FAKEBGPLS_SIDS=node`) advertises the same TED with node SIDs only to a second GoBGP (`visfox_gobgpd_node`,
+172.31.77.5), which Pola then reads; the IEL keeps the full feed.
+
+```bash
+VITE_API_MOCK=false VISFOX_NETWORK=lab VISFOX_SR_POLICY=polapce VISFOX_PCE_PATH=dynamic \
+  VISFOX_POLA_TED=node docker compose --profile cplane up --build -V
+```
+
 The networks share PolaPCE and the stand-in headends. At startup the IEL withdraws the VISFOX policies
 its SSoT does not have, so switching networks replaces the policies of the previous one.
 

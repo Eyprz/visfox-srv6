@@ -12,6 +12,10 @@
 # (PCEP PCCs). The IEL sends SR Policies to Pola with VISFOX_SR_POLICY=polapce:
 #   VITE_API_MOCK=false VISFOX_SR_POLICY=polapce docker compose --profile cplane up --build -V
 #   docker compose exec visfox_headend_a wget -qO- localhost:8080/policies
+# PolaPCE computes the paths (dynamic, the IEL's SIDs as waypoints) with VISFOX_PCE_PATH=dynamic and
+# VISFOX_POLA_TED=node (Pola's TED from the node-SID feed), on the lab network:
+#   VISFOX_NETWORK=lab VITE_API_MOCK=false VISFOX_SR_POLICY=polapce VISFOX_PCE_PATH=dynamic \
+#   VISFOX_POLA_TED=node docker compose --profile cplane up --build -V
 
 services:
   visfox_nginx:
@@ -58,6 +62,9 @@ services:
       VISFOX_SR_POLICY: ${VISFOX_SR_POLICY:-dryrun}
       # VVF control driver: dryrun (log only) or mgmt (routers' MGMT REST). Unset keeps the config's.
       VISFOX_VVF: ${VISFOX_VVF:-}
+      # SR Policy paths with polapce: explicit (the IEL's Segment Lists) or dynamic (PolaPCE computes
+      # them through the IEL's SIDs as waypoints; use VISFOX_POLA_TED=node). Unset keeps the config's.
+      VISFOX_PCE_PATH: ${VISFOX_PCE_PATH:-}
       # true: log every southbound instruction instead of sending it (checks, validation, demos).
       VISFOX_DRY_RUN: ${VISFOX_DRY_RUN:-false}
       # Network the IEL runs on: unset = the testbed (db/ted.yaml, config/operator.yaml), rich = plenty
@@ -89,12 +96,15 @@ services:
     profiles: [cplane]
     image: ghcr.io/nttcom/pola:v1.4.0
     volumes:
-      - ./infra/cplane/polad.yaml:/pola/polad.yaml:ro
+      # Pola's TED: unset = the full BGP-LS feed (visfox_gobgpd, shared with the IEL); node = the
+      # node-SID feed (visfox_gobgpd_node), for dynamic paths.
+      - ./infra/cplane/polad${VISFOX_POLA_TED:+-${VISFOX_POLA_TED}}.yaml:/pola/polad.yaml:ro
     networks:
       visfox_cplane:
         ipv4_address: 172.31.77.2
     depends_on:
       - visfox_gobgpd
+      - visfox_gobgpd_node
     restart: unless-stopped
 
   visfox_gobgpd:
@@ -126,6 +136,39 @@ services:
         ipv4_address: 172.31.77.4
     depends_on:
       - visfox_gobgpd
+    restart: unless-stopped
+
+  # Node-SID feed for Pola (VISFOX_POLA_TED=node): a second speaker advertises the same TED with the
+  # node SIDs only (FAKEBGPLS_SIDS=node) to a second GoBGP, which Pola reads; the IEL keeps the full
+  # feed and names the service SIDs as waypoints of dynamic paths.
+  visfox_gobgpd_node:
+    profiles: [cplane]
+    build:
+      context: ./infra/cplane/gobgp
+    command: ["-f", "/etc/gobgp/gobgpd.yaml", "--api-hosts", "0.0.0.0:50051"]
+    volumes:
+      - ./infra/cplane/gobgp/gobgpd-node.yaml:/etc/gobgp/gobgpd.yaml:ro
+    networks:
+      visfox_cplane:
+        ipv4_address: 172.31.77.5
+    restart: unless-stopped
+  visfox_bgpls_node:
+    profiles: [cplane]
+    build:
+      context: ./infra/cplane/fakebgpls
+    environment:
+      FAKEBGPLS_TED: /ted.yaml
+      FAKEBGPLS_PEER: 172.31.77.5
+      FAKEBGPLS_ROUTER_ID: 172.31.77.6
+      FAKEBGPLS_ASN: "65000"
+      FAKEBGPLS_SIDS: node
+    volumes:
+      - ./iel/db/ted-lab.yaml:/ted.yaml:ro
+    networks:
+      visfox_cplane:
+        ipv4_address: 172.31.77.6
+    depends_on:
+      - visfox_gobgpd_node
     restart: unless-stopped
 
   visfox_headend_a: &headend

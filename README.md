@@ -27,8 +27,9 @@ assures them.
   YANG model (RFC 8345) before the orchestrator sees it.
 - **Resources as pools.** VVF nodes, switcher inputs / outputs and headend unicasts are uniform resource
   pools; a shortage is always the same kind of issue, and the IEL proposes which STANDBY cells to release.
-- **Self-healing.** A failed change rolls back to the last known good config (LKG); at startup the IEL
-  reads the SR Policies back from the PCE and repairs any drift.
+- **Self-healing.** A failed change rolls back to the last known good config (LKG). At startup and on a
+  set interval the IEL reads the SR Policies and the switcher inputs back from the network and repairs any
+  drift, or only reports it (a setting in the GUI).
 - **Verified switching.** A test model replays every matrix operation against a network model and checks,
   after each southbound instruction, that no picture breaks, and compares every refusal with an
   exhaustive oracle of the possible allocations.
@@ -158,10 +159,10 @@ VISFOX-SRv6 is under active development (v0.x). What works today:
 | Operation | Crosspoint matrix: assign a preset to a cell, Take (one ON AIR per OUT), stop output, clear; the reasons a cell cannot be taken; releasing STANDBY cells of the same input when its streams run short |
 | Presets | SFC designer with the chain rules served by the IEL (VVF bundles, execution order, video formats); presets created, changed and deleted through the API and translated into paths on every assignment; live function parameters (color sliders, crop position controller) |
 | Visibility | Topology overview (live and STANDBY feed links, resource pool usage), real path of a cell with its Segment List, log bar, settings, live sync over SSE; English / Japanese, light / dark |
-| Topology | TED from a static seed or from BGP-LS (GoBGP, read at startup), through a YANG model (RFC 8345); SID interpretation rules for the testbed and for structured RFC 8986 SIDs |
+| Topology | TED from a static seed or from BGP-LS (GoBGP, followed while the IEL runs), through a YANG model (RFC 8345); SID interpretation rules for the testbed and for structured RFC 8986 SIDs |
 | Planning | Resource pools (VVF nodes, switcher inputs / outputs, headend streams); ways through cascaded switchers computed as a graph; hot and cold standby |
-| Southbound | SR Policies through PolaPCE (gRPC, PCEP), validated against a TED shared over BGP-LS; a dry-run driver that logs instead of sending |
-| Assurance | Rollback to the last known good config when a change fails; at startup, SR Policies read back from PolaPCE and drift repaired |
+| Southbound | SR Policies through PolaPCE (gRPC, PCEP): the IEL's Segment Lists, validated against a TED shared over BGP-LS, or paths PolaPCE computes through the IEL's SIDs as waypoints; a dry-run driver that logs instead of sending |
+| Assurance | Rollback to the last known good config when a change fails; SR Policies (PolaPCE) and switcher inputs read back at startup and on an interval, drift repaired or reported |
 | Quality | A switching test model run on every `go test`: no picture break at any southbound step, refusals checked against an exhaustive allocation oracle |
 | Development | An in-browser mock IEL with the same rules; a local C-Plane lab (PolaPCE, GoBGP, BGP-LS speaker, stand-in headends) |
 
@@ -169,16 +170,15 @@ With limits:
 
 | Area | Limit |
 | :--- | :--- |
-| VVF control | There is no M-plane component that manages the SR functions yet, so the IEL provisionally treats the REST API of the routers the VVFs run on as the M-plane. It selects the input of a switcher VVF that way (not tried on hardware yet); the config API of processing VVFs (caption, color / transcode / crop) is not defined, so those configs are logged |
+| VVF control | There is no M-plane component that manages the SR functions yet, so the IEL provisionally treats the REST API of the routers the VVFs run on as the M-plane. It selects the input of a switcher VVF that way (not tried on hardware yet); of processing VVFs it sets crop and color (caption is a fixed image for now, transcode has no parameters) |
 | Lab | The stand-in headends accept and report SR Policies but forward no packets |
-| Switching | After an OUT stops its output, its switcher keeps the last input, so a STANDBY feed on that input reaches the OUT. A cold standby Take is not seamless |
-| Topology | BGP-LS is read once at startup; changes are not followed |
+| Topology | A new IN or OUT needs a change of the network operator config and a restart (BGP-LS changes of VVF nodes and switchers are followed) |
+| Path computation | PolaPCE computes the paths only when enabled (`VISFOX_PCE_PATH=dynamic`). Pola v1.4.0 takes a node's first SRv6 SID as its node segment, so it reads a TED with node SIDs only (`VISFOX_POLA_TED=node` in the lab) and cannot validate the IEL's SIDs |
 | Branches | Ways through replicating VVFs (RFC 9524) are planned but not rendered |
 
 Not yet:
 
 - Telemetry, latency SLAs and telemetry-driven drift detection (the mock IEL simulates telemetry).
-- Path computation by PolaPCE (dynamic SR Policies with VVFs as waypoints).
 - The designer's resource estimate from the Go IEL (mock only).
 - BGP FlowSpec, a VIM (OpenStack), the channel-strip view and WebSocket transport.
 

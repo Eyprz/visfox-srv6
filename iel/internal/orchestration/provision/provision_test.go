@@ -59,3 +59,23 @@ func TestProvisionTimeout(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A Take that starts a new stream waits for it after its SR Policies, before the switch.
+func TestProvisionStreamSettle(t *testing.T) {
+	var steps []string
+	ok := stepDriver{steps: &steps}
+	o := New(Options{StreamSettle: time.Second, Drivers: map[domain.Op]Driver{
+		domain.OpFunctionSetParams: ok, domain.OpSRPolicySet: ok, domain.OpSwitcherSelect: ok,
+	}})
+	o.sleep = func(_ context.Context, d time.Duration) error { steps = append(steps, "wait "+d.String()); return nil }
+	if err := o.Provision(context.Background(), []domain.Instruction{
+		{Op: domain.OpFunctionSetParams}, {Op: domain.OpSRPolicySet, NewStream: true},
+		{Op: domain.OpSwitcherSelect}, {Op: domain.OpSRPolicySet},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"function.set_params", "sr_policy.set", "wait 1s", "switcher.select", "sr_policy.set"}
+	if !slices.Equal(steps, want) {
+		t.Fatalf("steps = %v", steps)
+	}
+}

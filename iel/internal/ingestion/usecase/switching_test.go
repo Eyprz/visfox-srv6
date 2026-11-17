@@ -13,8 +13,9 @@ package usecase_test
 //     through (no re-wiring at the Take).
 //   - The resources are used to the full. An independent oracle searches every allocation of the
 //     ways through the switchers that keeps the on-air ways (and, at a Take, the taken IN's fed way:
-//     the strict rule) and fits the limits. An operation is refused if and only if no such
-//     allocation exists.
+//     the strict rule) and fits the limits. With cold standby a Take must also fit while the IN
+//     stepping down is still on air (its way kept, the new IN beside it in the same tree). An
+//     operation is refused if and only if no such allocation exists.
 //
 // Besides: the predictions (validate, take_issues) match the outcome, a refused operation sends
 // nothing, the network holds exactly the SR Policies of the SSoT, every takeable STANDBY IN is fed to
@@ -398,36 +399,12 @@ type switching struct {
 	state  *netState
 	oracle bool
 	log    []string
-	// known are the known gaps the model reports instead of failing (first case of each).
-	known map[string]string
 }
-
-// Known gaps of the current design (reported in the test log, not failures).
-const (
-	// A switcher keeps the input it selected when its OUT has nothing on air any more (stop output, or
-	// the on-air cell cleared), so a STANDBY feed on that input reaches the OUT without its VVFs.
-	knownStaleSelect = "stale switcher selection"
-	// Cold standby sets the whole path up at the Take: the old and the new stream may reach the OUT
-	// together (other root switcher), and a VVF node the old picture uses may be reconfigured first.
-	knownColdTake = "cold standby Take is not seamless"
-)
 
 func newSwitching(t *testing.T, f *fixture, oracle bool) *switching {
 	t.Helper()
 	f.orch.take()
-	s := &switching{t: t, f: f, net: loadNet(t, f), state: newNetState(), oracle: oracle, known: map[string]string{}}
-	t.Cleanup(func() {
-		for _, k := range slices.Sorted(maps.Keys(s.known)) {
-			t.Logf("known gap: %s, e.g. %s", k, s.known[k])
-		}
-	})
-	return s
-}
-
-func (s *switching) note(kind, detail string) {
-	if _, ok := s.known[kind]; !ok {
-		s.known[kind] = detail
-	}
+	return &switching{t: t, f: f, net: loadNet(t, f), state: newNetState(), oracle: oracle}
 }
 
 func (s *switching) fail(format string, args ...any) {
@@ -533,7 +510,10 @@ func (s *switching) wants(cells map[string]apitypes.MatrixCell, paths map[string
 	for _, id := range slices.Sorted(maps.Keys(st)) {
 		c := cells[id]
 		fed := st[id] == apitypes.ExecutionStateActive || (s.net.hot && st[id] == apitypes.ExecutionStateStandby)
-		if !fed {
+		// A cold standby Take: the IN stepping down stays on air on its way until the switch.
+		stepping := !s.net.hot && o.kind == opTake && id != o.cell && c.DestinationId == cells[o.cell].DestinationId &&
+			c.ExecutionState == apitypes.ExecutionStateActive
+		if !fed && !stepping {
 			continue
 		}
 		w := byOut[c.DestinationId]
@@ -542,6 +522,10 @@ func (s *switching) wants(cells map[string]apitypes.MatrixCell, paths map[string
 			byOut[c.DestinationId] = w
 		}
 		w.fed = append(w.fed, c.SourceId)
+		if stepping && len(paths[id]) > 0 {
+			w.fixed[c.SourceId] = paths[id]
+			continue
+		}
 		if st[id] != apitypes.ExecutionStateActive || len(paths[id]) == 0 {
 			continue
 		}
@@ -656,7 +640,7 @@ func (s *switching) do(o switchOp) bool {
 		final[out] = tr[len(tr)-1]
 		if onAirOf(cells, out) == "" && onAirOf(nowCells, out) == "" {
 			if slices.ContainsFunc(tr, func(p string) bool { return p != "" }) {
-				s.note(knownStaleSelect, fmt.Sprintf("%s: %s shows %q", o, out, slices.Compact(slices.Clone(tr))))
+				s.fail("%s: %s has nothing on air but shows %q", o, out, slices.Compact(slices.Clone(tr)))
 			}
 			continue
 		}
@@ -664,17 +648,12 @@ func (s *switching) do(o switchOp) bool {
 		if out == target && changes {
 			allowed = append(allowed, final[out])
 		}
-		if o.kind == opStandby && out == target && final[out] != "" {
-			s.note(knownStaleSelect, fmt.Sprintf("%s: %s still shows %q", o, out, final[out]))
+		if o.kind == opStandby && out == target {
 			allowed = append(allowed, "")
 		}
 		switched := false
 		for i, p := range tr {
 			if !slices.Contains(allowed, p) {
-				if !s.net.hot && o.kind == opTake && out == target {
-					s.note(knownColdTake, fmt.Sprintf("%s: %s shows %q after %v", o, out, p, ops(ins[:i])))
-					break
-				}
 				s.fail("%s: %s shows %q after %v (allowed %q)", o, out, p, ops(ins[:i]), allowed)
 			}
 			if p != before[out] {
@@ -694,7 +673,7 @@ func (s *switching) do(o switchOp) bool {
 		id := onAirOf(now, out)
 		if id == "" {
 			if final[out] != "" {
-				s.note(knownStaleSelect, fmt.Sprintf("%s: %s has nothing on air but shows %q", o, out, final[out]))
+				s.fail("%s: %s has nothing on air but shows %q", o, out, final[out])
 			}
 			continue
 		}
@@ -793,6 +772,13 @@ func flowFixture(t *testing.T, network string) *fixture {
 	return f.init(t, presetsFor(network))
 }
 
+// coldFlowFixture is flowFixture on the testbed with cold standby.
+func coldFlowFixture(t *testing.T) *fixture {
+	t.Helper()
+	f := &fixture{limits: func(l *ssot.Limits) { l.VVFStreams = nil; l.StandbyFeed = ssot.StandbyFeedNone }}
+	return f.init(t, presetsFor(""))
+}
+
 func presetsFor(network string) string {
 	if network == "" {
 		return "../../../db/presets.yaml"
@@ -883,6 +869,7 @@ func TestSwitchingRandom(t *testing.T) {
 		oracle  bool
 	}{
 		{"testbed flow", func(t *testing.T) *fixture { return flowFixture(t, "") }, []string{plain}, true},
+		{"testbed cold flow", coldFlowFixture, []string{plain}, true},
 		{"rich flow", func(t *testing.T) *fixture { return flowFixture(t, "rich") }, []string{plain}, true},
 		{"testbed", newFixture, []string{"preset-1", "preset-2", "preset-3"}, false},
 		{"testbed cold standby", newColdFixture, []string{"preset-1", "preset-2", "preset-3"}, false},

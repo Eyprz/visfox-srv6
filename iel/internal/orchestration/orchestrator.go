@@ -67,6 +67,12 @@ func New(o Options) *Orchestrator {
 	}
 }
 
+// SetResources switches planning and rendering to new resources (the TED changed). What was
+// selected and provisioned stays; the next Refresh plans on the new resources.
+func (o *Orchestrator) SetResources(r *ssot.Resources) {
+	o.selector.Resources, o.renderer.Resources = r, r
+}
+
 // Load replaces what the orchestrator knows with a realization read from the SSoT.
 func (o *Orchestrator) Load(r ssot.Realization) {
 	o.sfps, o.configured, o.policies = map[string]domain.SFP{}, map[string]string{}, map[string]domain.SRPolicy{}
@@ -191,6 +197,25 @@ func (o *Orchestrator) Desired(reqs []domain.SFCRequest) ([]domain.SRPolicy, err
 			if in.Op == domain.OpSRPolicySet {
 				out = append(out, *in.Policy)
 			}
+		}
+	}
+	return out, nil
+}
+
+// Selections are the inputs the switcher VVFs should send on according to the SSoT: along the way of
+// every on-air request. A switcher on no on-air way has no expected input.
+func (o *Orchestrator) Selections(reqs []domain.SFCRequest) ([]domain.Selection, error) {
+	var out []domain.Selection
+	for _, r := range reqs {
+		if !r.OnAir {
+			continue
+		}
+		for _, h := range o.sfps[r.DestinationID].Way {
+			in, err := o.renderer.Input(h)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, domain.Selection{DestinationID: r.DestinationID, Node: h.Node, Next: in.Next})
 		}
 	}
 	return out, nil

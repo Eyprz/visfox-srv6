@@ -63,6 +63,12 @@ The TED is built in three steps: **data source -> YANG -> TED**.
 What the TED does not advertise lives in the network operator config: the IN / OUT bindings, the physical
 wiring of the switcher inputs, and the limits of every resource.
 
+A TED learned over BGP-LS is followed while the IEL runs: every assurance pass reads it again. When it
+changed, the resource pools are rebuilt and the streams planned again (an on-air stream through a node
+that went away moves to another node); the OUTs whose path moved are provisioned or reported, as drift
+(`drift_action`), and the WebUI is told by SSE `topology_changed`. A TED that cannot be interpreted (for
+example, the headend of an IN went away) is reported and the current one kept.
+
 ### Video functions, switchers and resource pools
 
 Video functions run on **VVFs** (Virtual Video processing Functions): SR-aware (End.AN) functions that
@@ -87,10 +93,13 @@ OUTs, one fed by another switcher carries a stream selected for one OUT only.
 
 How a STANDBY input waits is a network setting:
 
-- **Hot standby:** STANDBY inputs are already sent to the OUT's switchers (a feed policy that stops
-  after the switchers). A Take turns that policy into the whole path and switches. The picture changes
+- **Hot standby:** STANDBY inputs are already sent to the OUT's switchers (a feed policy that ends at
+  the input of the OUT's root switcher, so it never reaches an OUT with nothing on air). A Take turns that policy into the whole path and switches. The picture changes
   at once.
-- **Cold standby:** only the VVF nodes are reserved; the Take sets up the whole path.
+- **Cold standby:** only the VVF nodes are reserved. The Take works in two steps: the new input is sent
+  into the same switcher tree as the input on air, and once it has reached the switchers
+  (`stream_settle_ms`) the switchers switch. During the Take it needs a free switcher input, headend
+  stream and VVF nodes the picture on air does not use; without them the Take is refused beforehand.
 
 A Take runs, in order: the VVF configs of the new chain (on nodes the picture on air does not use), the
 SR Policy of the new stream, then the switcher selections, upstream first. The previous stream is turned
@@ -118,13 +127,18 @@ It also checks that predictions (`take_issues`, validation) match the outcome, t
 exactly the SR Policies of the SSoT, and that every takeable STANDBY input is fed.
 `VISFOX_SWITCHING_SEEDS=150 go test ./internal/ingestion/usecase/ -run TestSwitching` runs a longer search.
 
-Known limits reported by the model: a switcher keeps its last input when its OUT has nothing on air any
-more, and a cold standby Take is not seamless.
+Both hot and cold standby are checked this way.
 
 ### Assurance
 
-- At startup the IEL reads the SR Policies back from PolaPCE, compares them with the SSoT, provisions the
-  OUTs that drifted again and withdraws policies the SSoT does not have.
+- At startup and every `assurance_interval_s` (a runtime setting, 0 = startup only) the IEL reads the SR
+  Policies back from PolaPCE and the inputs of the switcher VVFs from their routers, and compares them
+  with the SSoT. The network is read without blocking operations; a pass that overlaps a change is
+  dropped.
+- What happens on drift is the runtime setting `drift_action`: `repair` provisions the OUTs that drifted
+  again and withdraws policies the SSoT does not have (the cell shows remediating, then healthy or
+  critical); `report` sends nothing and turns the ON AIR cells of those OUTs yellow (warning) until the
+  network matches again.
 - A failed change rolls the affected OUTs back to their last known good config and reports it.
 - Events (matrix updates, telemetry, rollbacks, switcher changes, logs) go to the WebUI over SSE.
 
@@ -134,7 +148,7 @@ more, and a cold standby Take is not seamless.
 | :--- | :--- |
 | SR Policy set / delete | `polapce`: PolaPCE (`CreateSRPolicy` / `DeleteSRPolicy`, PCEP to the headends) |
 | VVF control: input selection of a switcher VVF (`select`) | `mgmt`: the router's REST API (`POST /config/stream_switch`), provisionally |
-| VVF control: config of a processing VVF | `mgmt`: not defined yet |
+| VVF control: config of a processing VVF | `mgmt`: crop (`POST /config/stream_generator_full_clipping`), color (`POST /config/stream_converter_rgb`); caption (a fixed image for now) and transcode have nothing to set |
 
 VVF control has no proper M-plane yet: no component manages the SR functions, so the `mgmt` driver
 provisionally uses the REST API of the routers the VVFs run on. It moves to that component (a VNF
@@ -144,6 +158,17 @@ Every instruction kind can also go to the **dry-run** driver, which logs instead
 checks, validation and demos without touching the network (`orchestrator.sr_policy` /
 `orchestrator.vvf: dryrun`, or `VISFOX_DRY_RUN=true` for everything).
 
-The IEL sends explicit Segment Lists of service SIDs (VVF functions, switcher input ports, decap); the IGP
-routes between them. On a network whose TED is shared with PolaPCE over BGP-LS, Pola validates every SID
-against its TED.
+By default the IEL sends explicit Segment Lists of service SIDs (VVF functions, switcher input ports,
+decap); the IGP routes between them. On a network whose TED is shared with PolaPCE over BGP-LS, Pola
+validates every SID against its TED.
+
+With `orchestrator.polapce.path: dynamic` (or `VISFOX_PCE_PATH=dynamic`) PolaPCE computes the paths: the
+IEL still picks the VVF nodes and switcher ports, and sends their SIDs as waypoints, each with the router
+that advertises it; Pola fills in the path between them (`orchestrator.polapce.metric`). STANDBY feeds,
+which end at a switcher input, stay explicit, and a Take turns the same policy into a dynamic one. Read
+back, a dynamic policy reports its waypoints, which assurance compares with the SSoT.
+
+Pola v1.4.0 takes a node's first SRv6 SID as its node segment, whatever its behavior. With service SIDs in
+its TED, a dynamic path could enter a switcher through the wrong input port, so Pola reads a TED with node
+SIDs only (the lab's `VISFOX_POLA_TED=node`). Pola then cannot validate the IEL's SIDs, and the computed
+lists are longer (every hop's node SID).

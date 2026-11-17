@@ -68,6 +68,8 @@ const snapshot = (cells: MatrixCell[]): Snapshot => ({
     metrics_dump_interval_s: 30,
     default_sla: { max_latency_ms: 20, priority: 'normal' },
     log_level: 'info',
+    assurance_interval_s: 30,
+    drift_action: 'repair',
   },
   switchers: [],
 })
@@ -121,6 +123,16 @@ describe('dispatchSseEvent', () => {
     expect(useLogsStore.getState().entries[0].id).toBe('l1')
     expect(fetchPreset).toHaveBeenCalledWith('p1')
     expect(usePresetsStore.getState().presets).toEqual({})
+  })
+
+  it('reloads what the TED determines on topology_changed', async () => {
+    const reload = vi.fn().mockResolvedValue(undefined)
+    await dispatchSseEvent(
+      { type: 'topology_changed', added: [], removed: ['color-transcode-crop-fd77-ca'] },
+      undefined,
+      reload,
+    )
+    expect(reload).toHaveBeenCalledOnce()
   })
 })
 

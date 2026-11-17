@@ -30,6 +30,7 @@ import (
 
 	"github.com/eyprz/visfox-srv6/iel/internal/assurance/monitor"
 	"github.com/eyprz/visfox-srv6/iel/internal/assurance/report"
+	"github.com/eyprz/visfox-srv6/iel/internal/domain"
 	"github.com/eyprz/visfox-srv6/iel/internal/orchestration"
 	"github.com/eyprz/visfox-srv6/iel/internal/ssot"
 	"github.com/eyprz/visfox-srv6/iel/internal/translation"
@@ -52,6 +53,15 @@ type Options struct {
 	// Monitor reports the SR Policies the network holds (Intent Assurance); nil skips the check of
 	// the network against the SSoT at startup (dry run).
 	Monitor monitor.SRPolicySource
+	// Switches reports the inputs the switcher VVFs send on (Intent Assurance); nil skips them.
+	Switches monitor.SwitcherSource
+	// ReadTimeout bounds every read of the network by Intent Assurance (0: none).
+	ReadTimeout time.Duration
+	// ReadTED reads the TED from its source again and builds the resources from it (a TED learned
+	// over BGP-LS); nil when the TED does not change while the IEL runs (static seed). SaveTED stores
+	// a new TED in the SSoT.
+	ReadTED func(ctx context.Context) (*ssot.Resources, error)
+	SaveTED func(ctx context.Context, t domain.TED) error
 	// Arg is the ARG rule of the SID interpretation rule ("egress", "stream" or "none").
 	Arg string
 	// ColorBase is the base of the SR Policy colors (one color per OUT).
@@ -66,17 +76,31 @@ type Options struct {
 type env struct {
 	mu sync.Mutex
 
-	store     *ssot.Store
-	res       *ssot.Resources
-	cat       *ssot.Catalog
-	tr        translation.Translator
-	orch      *orchestration.Orchestrator
-	pub       report.Publisher
-	oplog     *report.Log
-	monitor   monitor.SRPolicySource
-	immutable apitypes.ImmutableConfig
-	onLevel   func(apitypes.LogLevel)
-	now       func() time.Time
+	store    *ssot.Store
+	res      *ssot.Resources
+	cat      *ssot.Catalog
+	tr       translation.Translator
+	orch     *orchestration.Orchestrator
+	pub      report.Publisher
+	oplog    *report.Log
+	monitor  monitor.SRPolicySource
+	switches monitor.SwitcherSource
+	// readTimeout bounds every read of the network by Intent Assurance.
+	readTimeout time.Duration
+	// gen counts the changes provisioned to the network: an assurance pass that read the network
+	// while it changed is dropped.
+	gen uint64
+	// assurance is what the last assurance pass reported, to log only what changed.
+	assurance struct{ readErr, unread, drift, tedErr string }
+	// readTED / saveTED follow the TED while the IEL runs (Options.ReadTED); baseCat is the catalog
+	// without the TED's nodes, switcherRequired its domain policy.
+	readTED          func(ctx context.Context) (*ssot.Resources, error)
+	saveTED          func(ctx context.Context, t domain.TED) error
+	baseCat          *ssot.Catalog
+	switcherRequired bool
+	immutable        apitypes.ImmutableConfig
+	onLevel          func(apitypes.LogLevel)
+	now              func() time.Time
 
 	// The SSoT in memory: presets with their layouts (SVoT) and the Active Intent Table.
 	presets   []*apitypes.Preset
@@ -121,9 +145,12 @@ type UseCases struct {
 	StandbyCell              StandbyCell
 	GetCellPath              GetCellPath
 	// System.
-	GetConfig    GetConfig
-	UpdateConfig UpdateConfig
-	GetLogs      GetLogs
+	GetConfig GetConfig
+	// AssureNetwork is Intent Assurance while the IEL runs (no API operation; run every
+	// assurance_interval_s).
+	AssureNetwork AssureNetwork
+	UpdateConfig  UpdateConfig
+	GetLogs       GetLogs
 }
 
 // New loads the SSoT, creates the intents of every IN x OUT and plans the reserved streams.
@@ -138,9 +165,9 @@ func New(ctx context.Context, o Options) (*UseCases, error) {
 		store: o.Store, res: o.Resources, cat: cat, tr: translation.Translator{Catalog: cat},
 		orch: orchestration.New(orchestration.Options{Resources: o.Resources, SwitcherRequired: required,
 			Arg: o.Arg, ColorBase: o.ColorBase, Provisioner: o.Provisioner}),
-		pub: o.Publisher, monitor: o.Monitor, immutable: o.Immutable, onLevel: o.OnLogLevel, now: o.Now,
+		pub: o.Publisher, monitor: o.Monitor, switches: o.Switches, readTimeout: o.ReadTimeout, immutable: o.Immutable, onLevel: o.OnLogLevel, now: o.Now,
 		layouts: map[string]apitypes.PresetLayout{}, cells: map[string]*ssot.ActiveIntent{}, published: map[string]string{},
-		config: o.DefaultConfig,
+		config: o.DefaultConfig, readTED: o.ReadTED, saveTED: o.SaveTED, baseCat: o.Catalog, switcherRequired: required,
 	}
 	if s.now == nil {
 		s.now = time.Now
@@ -167,6 +194,14 @@ func New(ctx context.Context, o Options) (*UseCases, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	} else if cfg != nil {
 		s.config = *cfg
+		if s.config.DriftAction == "" {
+			// Stored before the assurance settings existed.
+			s.config.DriftAction = o.DefaultConfig.DriftAction
+			s.config.AssuranceIntervalS = o.DefaultConfig.AssuranceIntervalS
+		}
+	}
+	if s.config.DriftAction == "" {
+		s.config.DriftAction = apitypes.DriftActionRepair
 	}
 	s.oplog = report.NewLog(o.Logger, o.Publisher, s.now, s.config.LogLevel)
 	s.onLevel(s.config.LogLevel)
@@ -196,7 +231,7 @@ func New(ctx context.Context, o Options) (*UseCases, error) {
 		GetMatrixState: GetMatrixState{s}, GetMatrixCell: GetMatrixCell{s}, ValidateMatrixAssignment: ValidateMatrixAssignment{s},
 		ApplyPresetToCell: ApplyPresetToCell{s}, ClearCellPreset: ClearCellPreset{s}, TakeCell: TakeCell{s},
 		StandbyCell: StandbyCell{s}, GetCellPath: GetCellPath{s},
-		GetConfig: GetConfig{s}, UpdateConfig: UpdateConfig{s}, GetLogs: GetLogs{s},
+		GetConfig: GetConfig{s}, UpdateConfig: UpdateConfig{s}, GetLogs: GetLogs{s}, AssureNetwork: AssureNetwork{s},
 	}, nil
 }
 

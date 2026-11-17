@@ -72,7 +72,8 @@ type Selector struct {
 //
 // fresh names the streams being taken (destination ids): their blocks avoid nodes that run another
 // config now, so the new config is injected before the switch without touching the picture on air
-// (make-before-break). Only when no such node is free do they reuse one.
+// (make-before-break). Only when no such node is free do they reuse one, never a node of the OUT's
+// picture on air (its previous on-air stream): without another node the Take does not fit.
 func (a Selector) Select(streams []domain.SFCRequest, st State, fresh map[string]bool) Selection {
 	al := Selection{SFPs: map[string]domain.SFP{}, Users: map[string][]string{}}
 	feeds := a.allocateFeeds(streams, st, fresh, &al)
@@ -87,6 +88,11 @@ func (a Selector) Select(streams []domain.SFCRequest, st State, fresh map[string
 	busyElse := func(key, nodeID, config string) bool {
 		live, ok := st.Configured[nodeID]
 		return fresh[key] && ok && live != config
+	}
+	// onAir reports whether the node carries the OUT's picture until the switch.
+	onAir := func(key, nodeID string) bool {
+		prev := st.Previous[key]
+		return prev.Source != "" && slices.Contains(prev.Nodes, nodeID)
 	}
 	fits := func(nodeID, vvfID, config string) bool {
 		l, ok := loads[nodeID]
@@ -141,6 +147,9 @@ func (a Selector) Select(streams []domain.SFCRequest, st State, fresh map[string
 				if used[s.DestinationID][id] || !fits(id, block.VVF.Id, config) {
 					continue
 				}
+				if busyElse(s.DestinationID, id, config) && onAir(s.DestinationID, id) {
+					continue // reconfiguring it would break the picture before the switch
+				}
 				all = append(all, id)
 				if !busyElse(s.DestinationID, id, config) {
 					quiet = append(quiet, id)
@@ -168,6 +177,7 @@ func (a Selector) Select(streams []domain.SFCRequest, st State, fresh map[string
 	for i, s := range streams {
 		sfp := domain.SFP{Nodes: nodes[i], Feeds: feeds[s.DestinationID]}
 		if s.OnAir {
+			sfp.Source = s.SourceID
 			sfp.Way = feeds[s.DestinationID][s.SourceID]
 		}
 		al.SFPs[s.DestinationID] = sfp

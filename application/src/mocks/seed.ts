@@ -275,9 +275,9 @@ export const functionCatalog: FunctionCatalogItem[] = [
       type: 'object',
       required: ['r', 'g', 'b'],
       properties: {
-        r: { type: 'integer', minimum: -255, maximum: 255 },
-        g: { type: 'integer', minimum: -255, maximum: 255 },
-        b: { type: 'integer', minimum: -255, maximum: 255 },
+        r: { type: 'integer', minimum: -1024, maximum: 1008 },
+        g: { type: 'integer', minimum: -1024, maximum: 1008 },
+        b: { type: 'integer', minimum: -1024, maximum: 1008 },
       },
     },
   },
@@ -379,4 +379,6 @@ export const defaultDynamicConfig: DynamicConfig = {
   sse_interval_ms: 1000,
   metrics_dump_interval_s: 30,
   log_level: 'info',
+  assurance_interval_s: 30,
+  drift_action: 'repair',
 }

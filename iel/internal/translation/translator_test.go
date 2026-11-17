@@ -89,7 +89,7 @@ func TestChainDuplicateAndParams(t *testing.T) {
 	v := validator(t)
 	c := chain(transcode, crop, color)
 	c[1].InstanceId = c[0].InstanceId
-	c[2].Params = map[string]any{"r": 300.0, "g": 1.5, "b": 0.0, "z": 1.0}
+	c[2].Params = map[string]any{"r": 1100.0, "g": 1.5, "b": 0.0, "z": 1.0}
 	issues, _ := v.CheckChain(c)
 	got := codes(issues)
 	want := []apitypes.ChainIssueCode{apitypes.ChainIssueCodeDUPLICATEINSTANCEID,

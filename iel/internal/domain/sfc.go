@@ -98,16 +98,18 @@ func (h *Hop) UnmarshalJSON(b []byte) error {
 // of its on-air IN through the VVFs that control the stream flow (upstream first) and one
 // processing VVF node per SF instance ("" when none is free). Feeds are the ways of every IN sent
 // toward the OUT (the on-air one and, with hot standby, the STANDBY ones): together they form one
-// tree whose root, a select node, feeds the OUT.
+// tree whose root, a select node, feeds the OUT. Source is the on-air IN ("" when the OUT has none).
 type SFP struct {
-	Way   []Hop
-	Nodes []string
-	Feeds map[string][]Hop `json:",omitempty"`
+	Source string `json:",omitempty"`
+	Way    []Hop
+	Nodes  []string
+	Feeds  map[string][]Hop `json:",omitempty"`
 }
 
 // UnmarshalJSON also reads SFPs stored before switchers became VVFs ("Switchers" for Way).
 func (s *SFP) UnmarshalJSON(b []byte) error {
 	var v struct {
+		Source         string
 		Way, Switchers []Hop
 		Nodes          []string
 		Feeds          map[string][]Hop
@@ -115,7 +117,7 @@ func (s *SFP) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &v); err != nil {
 		return err
 	}
-	s.Way, s.Nodes, s.Feeds = v.Way, v.Nodes, v.Feeds
+	s.Source, s.Way, s.Nodes, s.Feeds = v.Source, v.Way, v.Nodes, v.Feeds
 	if s.Way == nil {
 		s.Way = v.Switchers
 	}

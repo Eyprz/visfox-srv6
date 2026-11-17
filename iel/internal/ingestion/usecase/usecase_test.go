@@ -4,12 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"go.yaml.in/yaml/v3"
 	_ "modernc.org/sqlite"
 
 	apitypes "github.com/eyprz/visfox-srv6/api/generated/go"
@@ -81,9 +83,21 @@ type network struct{ policies []domain.SRPolicy }
 
 func (n *network) SRPolicies(context.Context) ([]domain.SRPolicy, error) { return n.policies, nil }
 
+// switchers is the inputs fake switcher VVFs report (node id -> next).
+type switchers map[string]int
+
+func (s switchers) Selected(_ context.Context, node string) (int, error) {
+	next, ok := s[node]
+	if !ok {
+		return 0, errors.New("unreachable")
+	}
+	return next, nil
+}
+
 type fixture struct {
-	// mon, when set, is the monitor the next open uses.
+	// mon, when set, is the monitor the next open uses; sw the switcher inputs it reports.
 	mon      *network
+	sw       switchers
 	db       *sql.DB
 	pub      *recorder
 	orch     *southbound
@@ -93,6 +107,8 @@ type fixture struct {
 	limits func(*ssot.Limits)
 	// network selects the shipped network ("" testbed, "rich": config/operator-rich.yaml, db/ted-rich.yaml).
 	network string
+	// readTED, when set, is the TED source the IEL follows while it runs.
+	readTED func(context.Context) (*ssot.Resources, error)
 }
 
 // newFixture builds the use cases from the shipped operator config, TED seed, catalog and presets,
@@ -163,9 +179,12 @@ func (f *fixture) open(t *testing.T) *usecase.UseCases {
 	if f.mon != nil {
 		mon.Monitor = f.mon
 	}
+	if f.sw != nil {
+		mon.Switches = f.sw
+	}
 	uc, err := usecase.New(ctx, usecase.Options{
 		Store: st, Resources: res, Catalog: cat, Publisher: f.pub,
-		Provisioner: f.orch, Monitor: mon.Monitor, Arg: op.SIDRule.Arg,
+		Provisioner: f.orch, Monitor: mon.Monitor, Switches: mon.Switches, Arg: op.SIDRule.Arg, ReadTED: f.readTED,
 		DefaultConfig: apitypes.DynamicConfig{SseIntervalMs: 1000, MetricsDumpIntervalS: 30, LogLevel: apitypes.LogLevelInfo},
 	})
 	if err != nil {
@@ -299,7 +318,7 @@ func TestPresetLifecycle(t *testing.T) {
 	if err != nil || len(r.AppliedCellIds) != 1 || r.Instance.Params["r"] != 12.0 {
 		t.Fatalf("patch = %+v, %v", r, err)
 	}
-	if _, err := f.uc.PatchPresetFunctionParams.Run(ctx, p.Id, "sf-color-1", map[string]any{"r": 999.0}); code(t, err) != apitypes.ErrorCodeINVALIDPARAMS {
+	if _, err := f.uc.PatchPresetFunctionParams.Run(ctx, p.Id, "sf-color-1", map[string]any{"r": 1009.0}); code(t, err) != apitypes.ErrorCodeINVALIDPARAMS {
 		t.Fatal("out-of-range params must fail")
 	}
 	if err := f.uc.DeletePreset.Run(ctx, p.Id); code(t, err) != apitypes.ErrorCodePRESETINUSE {
@@ -691,6 +710,220 @@ func TestStartupRepairsDrift(t *testing.T) {
 	}
 }
 
+// While the IEL runs, Assurance reads the SR Policies and the switcher inputs back on every pass:
+// with drift_action repair it provisions the drifted OUT again, with report it only turns the on-air
+// cell warning until the network matches again.
+func TestContinuousAssurance(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	if _, err := f.uc.ApplyPresetToCell.Run(ctx, "IN1-OUT1", "preset-1", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.uc.TakeCell.Run(ctx, "IN1-OUT1"); err != nil {
+		t.Fatal(err)
+	}
+	f.sw = switchers{}
+	for _, in := range f.orch.take() {
+		if in.Op == domain.OpSwitcherSelect {
+			f.sw[in.Target] = in.Select.Next
+		}
+	}
+	r, err := ssot.NewStore(f.db).Realization(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mon = &network{policies: r.Policies}
+	uc := f.open(t)
+	if got := f.orch.take(); len(got) != 0 {
+		t.Fatalf("the network matches, but sent %v", ops(got))
+	}
+	if d := uc.AssureNetwork.Interval(); d != 0 {
+		t.Fatalf("interval = %v without a configured one", d)
+	}
+	health := func() apitypes.HealthState {
+		c, err := uc.GetMatrixCell.Run("IN1-OUT1")
+		if err != nil || c.HealthState == nil {
+			t.Fatalf("cell = %+v, %v", c, err)
+		}
+		return *c.HealthState
+	}
+
+	// A pass over a matching network does nothing.
+	uc.AssureNetwork.Run(ctx)
+	if got := f.orch.take(); len(got) != 0 {
+		t.Fatalf("no drift, but sent %v", ops(got))
+	}
+
+	// Someone switched the switcher by hand: repair (the default) selects the SSoT's input again.
+	for node, next := range f.sw {
+		f.sw[node] = next + 1
+	}
+	uc.AssureNetwork.Run(ctx)
+	if got := ops(f.orch.take()); !slices.Contains(got, "switcher.select sw-fd77-a") {
+		t.Fatalf("repair = %v", got)
+	}
+	if h := health(); h != apitypes.HealthStateHealthy {
+		t.Fatalf("health after the repair = %s", h)
+	}
+
+	// Report only: a vanished policy turns the on-air cell warning and is not repaired, until the
+	// network matches again.
+	report, every := apitypes.DriftActionReport, 15
+	if _, err := uc.UpdateConfig.Run(ctx, apitypes.DynamicConfigPatch{DriftAction: &report, AssuranceIntervalS: &every}); err != nil {
+		t.Fatal(err)
+	}
+	if d := uc.AssureNetwork.Interval(); d != 15*time.Second {
+		t.Fatalf("interval = %v", d)
+	}
+	for node, next := range f.sw {
+		f.sw[node] = next - 1
+	}
+	f.mon.policies = nil
+	uc.AssureNetwork.Run(ctx)
+	uc.AssureNetwork.Run(ctx)
+	if got := f.orch.take(); len(got) != 0 {
+		t.Fatalf("report only, but sent %v", ops(got))
+	}
+	if h := health(); h != apitypes.HealthStateWarning {
+		t.Fatalf("health with drift = %s", h)
+	}
+	drift := 0
+	for _, l := range uc.GetLogs.Run(nil, "", 1000) {
+		if strings.Contains(l.Message, "reported only") {
+			drift++
+		}
+	}
+	if drift != 1 {
+		t.Fatalf("drift logged %d times over two passes", drift)
+	}
+	f.mon.policies = r.Policies
+	uc.AssureNetwork.Run(ctx)
+	if h := health(); h != apitypes.HealthStateHealthy {
+		t.Fatalf("health after the network matched again = %s", h)
+	}
+
+	// An unreadable switcher is not judged.
+	delete(f.sw, "sw-fd77-a")
+	uc.AssureNetwork.Run(ctx)
+	if h := health(); h != apitypes.HealthStateHealthy {
+		t.Fatalf("health with an unreadable switcher = %s", h)
+	}
+
+	bad := -1
+	if _, err := uc.UpdateConfig.Run(ctx, apitypes.DynamicConfigPatch{AssuranceIntervalS: &bad}); code(t, err) != apitypes.ErrorCodeINVALIDPARAMS {
+		t.Fatal("a negative interval accepted")
+	}
+}
+
+// testbedWithout builds the testbed's resources with the given advertised hosts missing (a TED read
+// again from BGP-LS after nodes went away).
+func testbedWithout(t *testing.T, hosts ...string) *ssot.Resources {
+	t.Helper()
+	raw, err := os.ReadFile("../../../db/ted.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seed ted.Seed
+	if err := yaml.Unmarshal(raw, &seed); err != nil {
+		t.Fatal(err)
+	}
+	seed.Nodes = slices.DeleteFunc(seed.Nodes, func(n ted.SeedNode) bool { return slices.Contains(hosts, n.Name) })
+	dev, err := seed.ToYANG()
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := config.LoadOperator("../../../config/operator.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg, err := ted.Interpret(dev, op.SIDRule, op.Bindings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cat, err := ssot.LoadCatalog("../../../db/catalog.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := ssot.NewResources(tg, cat.Constraints.Vvfs, op.Wiring, op.Limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+// While the IEL runs it follows the TED: when the VVF node of an on-air stream disappears, the stream
+// is planned again on another node and provisioned (drift_action repair), the clients are told
+// (topology_changed), and a TED that cannot be read is reported once and the current one kept.
+func TestFollowTED(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	if _, err := f.uc.ApplyPresetToCell.Run(ctx, "IN1-OUT1", "preset-3", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.uc.TakeCell.Run(ctx, "IN1-OUT1"); err != nil {
+		t.Fatal(err)
+	}
+	var used string
+	for _, in := range f.orch.take() {
+		if in.Op == domain.OpFunctionSetParams {
+			used = in.Target
+		}
+	}
+	host := map[string]string{"color-transcode-crop-fd77-ca": "100G-8KDG-Converter-1",
+		"color-transcode-crop-fd77-cb": "100G-8KDG-Converter-2", "color-transcode-crop-fd77-cc": "100G-8KDG-Converter-3"}[used]
+	if host == "" {
+		t.Fatalf("on-air converter = %q", used)
+	}
+
+	var res *ssot.Resources
+	var readErr error
+	f.readTED = func(context.Context) (*ssot.Resources, error) { return res, readErr }
+	res = testbedWithout(t)
+	uc := f.open(t)
+	f.orch.take()
+	uc.AssureNetwork.Run(ctx)
+	if got := f.orch.take(); len(got) != 0 || f.pub.count("topology_changed") != 0 {
+		t.Fatalf("same TED, but sent %v", ops(got))
+	}
+
+	res = testbedWithout(t, host)
+	uc.AssureNetwork.Run(ctx)
+	got := f.orch.take()
+	moved := ""
+	for _, in := range got {
+		if in.Op == domain.OpFunctionSetParams {
+			moved = in.Target
+		}
+	}
+	if moved == "" || moved == used || !slices.Contains(ops(got), "sr_policy.set headend-100g-8kdg-encap-a") {
+		t.Fatalf("after %s went away: %v", used, ops(got))
+	}
+	if f.pub.count("topology_changed") != 1 {
+		t.Fatal("topology_changed not published")
+	}
+	c, _ := uc.GetMatrixCell.Run("IN1-OUT1")
+	if c.ExecutionState != apitypes.ExecutionStateActive || *c.HealthState != apitypes.HealthStateHealthy {
+		t.Fatalf("cell = %s %s", c.ExecutionState, *c.HealthState)
+	}
+	uc.AssureNetwork.Run(ctx)
+	if got := f.orch.take(); len(got) != 0 || f.pub.count("topology_changed") != 1 {
+		t.Fatalf("unchanged TED, but sent %v", ops(got))
+	}
+
+	readErr = errors.New("gobgp down")
+	uc.AssureNetwork.Run(ctx)
+	uc.AssureNetwork.Run(ctx)
+	n := 0
+	for _, l := range uc.GetLogs.Run(nil, "", 1000) {
+		if strings.Contains(l.Message, "gobgp down") {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("read error logged %d times", n)
+	}
+}
+
 // Hot standby on the testbed wiring: IN 1 and 2 wait on SW1, IN 3 and 4 on SW2 -> SW1 e. Taking IN 4
 // keeps every stream on its port: IN 4's feed policy only gains the VVFs, the other feeds are not
 // touched, and the switchers select upstream first.
@@ -718,7 +951,7 @@ func TestHotStandbyTakeKeepsTheSwitcherPorts(t *testing.T) {
 		return out
 	}
 	before := segs()
-	if before["headend-100g-8kdg-encap-d"] != "fd77:dd::,fd77:ae::,fd77:ff::1" {
+	if before["headend-100g-8kdg-encap-d"] != "fd77:dd::,fd77:ae::" {
 		t.Fatalf("IN 4 feed = %s", before["headend-100g-8kdg-encap-d"])
 	}
 
@@ -751,13 +984,13 @@ func TestHotStandbyTakeKeepsTheSwitcherPorts(t *testing.T) {
 			t.Errorf("%s moved: %s -> %s", h, before[h], after[h])
 		}
 	}
-	if after["headend-100g-8kdg-encap-a"] != "fd77:aa::,fd77:ff::1" {
+	if after["headend-100g-8kdg-encap-a"] != "fd77:aa::" {
 		t.Errorf("IN 1 feed = %s", after["headend-100g-8kdg-encap-a"])
 	}
 }
 
 // Hot standby: a STANDBY IN is already sent into a switcher feeding the OUT (feed policy up to the
-// decap without VVFs), the Take turns its policy into the whole path and switches, and the stream
+// root switcher input, no further), the Take turns its policy into the whole path and switches, and the stream
 // stepping down turns back into a feed.
 func TestHotStandbyTakeOnlySwitches(t *testing.T) {
 	ctx := context.Background()
@@ -769,8 +1002,8 @@ func TestHotStandbyTakeOnlySwitches(t *testing.T) {
 	}
 	got := f.orch.take()
 	if !slices.Equal(ops(got), []string{"sr_policy.set headend-100g-8kdg-encap-a", "sr_policy.set headend-100g-8kdg-encap-b"}) ||
-		strings.Join(got[0].Policy.SegmentList, ",") != "fd77:aa::,fd77:ff::1" ||
-		strings.Join(got[1].Policy.SegmentList, ",") != "fd77:ab::,fd77:ff::1" {
+		strings.Join(got[0].Policy.SegmentList, ",") != "fd77:aa::" ||
+		strings.Join(got[1].Policy.SegmentList, ",") != "fd77:ab::" {
 		t.Fatalf("standby feeds = %v", got)
 	}
 
@@ -792,7 +1025,7 @@ func TestHotStandbyTakeOnlySwitches(t *testing.T) {
 		"sr_policy.set headend-100g-8kdg-encap-b", "switcher.select sw-fd77-a",
 		// IN 1 stepped down: back to its feed, nothing is withdrawn
 		"sr_policy.set headend-100g-8kdg-encap-a",
-	}) || strings.Join(got[4].Policy.SegmentList, ",") != "fd77:aa::,fd77:ff::1" {
+	}) || strings.Join(got[4].Policy.SegmentList, ",") != "fd77:aa::" {
 		t.Fatalf("second take = %v", ops(got))
 	}
 
@@ -1030,5 +1263,35 @@ func TestReleaseOnlyTheSameIN(t *testing.T) {
 	v, _ = f.uc.ValidateMatrixAssignment.Run("IN1-OUT3", "preset-2", nil)
 	if v.Feasible || (*v.Errors)[0].ReleasableCells == nil || !slices.Equal(*(*v.Errors)[0].ReleasableCells, []string{"IN1-OUT1"}) {
 		t.Fatalf("validate = %+v", *v.Errors)
+	}
+}
+
+// Cold standby: a Take is made in two steps. The new IN gets VVF nodes the picture on air does not
+// use and an SR Policy into the same switcher tree (a new stream, waited for), then the switchers
+// switch, then the old stream is withdrawn.
+func TestColdStandbyTakeMakesBeforeBreak(t *testing.T) {
+	ctx := context.Background()
+	f := newColdFixture(t)
+	for _, a := range [][2]string{{"IN1-OUT1", "preset-1"}, {"IN3-OUT1", "preset-2"}} {
+		if _, err := f.uc.ApplyPresetToCell.Run(ctx, a[0], a[1], nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.uc.TakeCell.Run(ctx, "IN1-OUT1"); err != nil {
+		t.Fatal(err)
+	}
+	f.orch.take()
+	if _, err := f.uc.TakeCell.Run(ctx, "IN3-OUT1"); err != nil {
+		t.Fatal(err)
+	}
+	got := f.orch.take()
+	if !slices.Equal(ops(got), []string{
+		"function.set_params caption-fd77-bb", "function.set_params color-transcode-crop-fd77-cb",
+		"sr_policy.set headend-100g-8kdg-encap-c", "switcher.select sw-fd77-a", "sr_policy.delete headend-100g-8kdg-encap-a",
+	}) {
+		t.Fatalf("take = %v", ops(got))
+	}
+	if !got[2].NewStream || got[0].NewStream || got[3].NewStream {
+		t.Fatalf("only the new stream's SR Policy waits: %+v", got)
 	}
 }

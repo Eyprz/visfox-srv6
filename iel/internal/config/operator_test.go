@@ -70,6 +70,32 @@ func TestLoadOperatorTEDSource(t *testing.T) {
 	}
 }
 
+func TestLoadOperatorPCEPath(t *testing.T) {
+	const rule = "sid_rule: {name: d4s-testbed}\n"
+	for body, want := range map[string]string{
+		rule: "explicit/igp",
+		rule + "orchestrator: {polapce: {path: dynamic}}\n":                "dynamic/igp",
+		rule + "orchestrator: {polapce: {path: dynamic, metric: delay}}\n": "dynamic/delay",
+		rule + "orchestrator: {polapce: {path: computed}}\n":               "",
+		rule + "orchestrator: {polapce: {metric: fastest}}\n":              "",
+	} {
+		path := t.TempDir() + "/op.yaml"
+		if err := writeFile(path, body); err != nil {
+			t.Fatal(err)
+		}
+		o, err := LoadOperator(path)
+		if want == "" {
+			if err == nil {
+				t.Errorf("%q: accepted", body)
+			}
+			continue
+		}
+		if got := o.Orchestrator.PolaPCE.Path + "/" + o.Orchestrator.PolaPCE.Metric; err != nil || got != want {
+			t.Errorf("%q: %s, %v", body, got, err)
+		}
+	}
+}
+
 func TestLoadOperatorRejectsUnknownFields(t *testing.T) {
 	path := t.TempDir() + "/op.yaml"
 	if err := writeFile(path, "sid_rule: {name: d4s-testbed}\nunknown: 1\n"); err != nil {
@@ -95,15 +121,21 @@ func TestOperatorDrivers(t *testing.T) {
 	if op.Orchestrator.SRPolicy != DriverDryRun || op.Orchestrator.VVF != DriverDryRun {
 		t.Fatalf("defaults = %+v", op.Orchestrator)
 	}
-	if err := op.Override(DriverPolaPCE, DriverMGMT, false); err != nil || op.Orchestrator.SRPolicy != DriverPolaPCE || op.Orchestrator.VVF != DriverMGMT {
+	if err := op.Override(DriverPolaPCE, DriverMGMT, "", false); err != nil || op.Orchestrator.SRPolicy != DriverPolaPCE || op.Orchestrator.VVF != DriverMGMT {
 		t.Fatalf("override = %+v, %v", op.Orchestrator, err)
 	}
 	// Dry run wins over every driver.
-	if err := op.Override("", "", true); err != nil || op.Orchestrator.SRPolicy != DriverDryRun || op.Orchestrator.VVF != DriverDryRun {
+	if err := op.Override("", "", "", true); err != nil || op.Orchestrator.SRPolicy != DriverDryRun || op.Orchestrator.VVF != DriverDryRun {
 		t.Fatalf("dry run = %+v, %v", op.Orchestrator, err)
 	}
-	if err := op.Override("", "d4s", false); err == nil {
+	if err := op.Override("", "d4s", "", false); err == nil {
 		t.Fatal("unknown VVF driver accepted")
+	}
+	if err := op.Override("", "", PathDynamic, false); err != nil || op.Orchestrator.PolaPCE.Path != PathDynamic {
+		t.Fatalf("pce path = %+v, %v", op.Orchestrator.PolaPCE, err)
+	}
+	if err := op.Override("", "", "computed", false); err == nil {
+		t.Fatal("unknown PCE path accepted")
 	}
 	for _, bad := range []string{
 		"sid_rule: {name: d4s-testbed}\norchestrator: {vvf: d4s}\n",

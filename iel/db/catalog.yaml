@@ -100,6 +100,6 @@ functions:
       type: object
       required: [r, g, b]
       properties:
-        r: { type: integer, minimum: -255, maximum: 255 }
-        g: { type: integer, minimum: -255, maximum: 255 }
-        b: { type: integer, minimum: -255, maximum: 255 }
+        r: { type: integer, minimum: -1024, maximum: 1008 }
+        g: { type: integer, minimum: -1024, maximum: 1008 }
+        b: { type: integer, minimum: -1024, maximum: 1008 }

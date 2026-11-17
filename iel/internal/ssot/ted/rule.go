@@ -68,8 +68,9 @@ type Binding struct {
 type Bindings struct {
 	Sources      []Binding `yaml:"sources"`
 	Destinations []Binding `yaml:"destinations"`
-	// Labels replace the rule's label for some nodes (host name -> display name), e.g. the material a
-	// pinned caption node burns in. Names only: ids and roles still come from the advertisement.
+	// Labels replace the rule's label for some nodes (host name or router id -> display name), e.g. the
+	// material a pinned caption node burns in, or "Caption A" for the router id PolaPCE and GoBGP
+	// report. Names only: ids and roles still come from the advertisement.
 	Labels map[string]string `yaml:"labels"`
 }
 
@@ -162,6 +163,7 @@ func Interpret(dev *tedyang.Device, rule Rule, b Bindings) (domain.TED, error) {
 	}
 
 	seen := map[string]bool{}
+	byRouterID := map[string]bool{}
 	for ri := range rule.Roles {
 		nodes := byRule[ri]
 		slices.SortFunc(nodes, func(a, b *domain.Node) int { return cmp.Compare(a.ID, b.ID) })
@@ -171,16 +173,29 @@ func Interpret(dev *tedyang.Device, rule Rule, b Bindings) (domain.TED, error) {
 			}
 			seen[n.ID] = true
 			n.Label = strings.ReplaceAll(rule.Roles[ri].Label, "{n}", strconv.Itoa(i+1))
-			if l, ok := b.Labels[n.Hostname]; ok {
-				n.Label = l
+			byName, okName := b.Labels[n.Hostname]
+			byRouter, okRouter := "", false
+			if n.RouterID != "" && n.RouterID != n.Hostname {
+				byRouter, okRouter = b.Labels[n.RouterID]
+			}
+			switch {
+			case okName && okRouter:
+				return domain.TED{}, fmt.Errorf("labels name node %q twice (host name and router id %s)", n.Hostname, n.RouterID)
+			case okName:
+				n.Label = byName
+			case okRouter:
+				n.Label = byRouter
+			}
+			if n.RouterID != "" {
+				byRouterID[n.RouterID] = true
 			}
 			t.Nodes = append(t.Nodes, *n)
 		}
 	}
 
-	for host := range b.Labels {
-		if _, ok := byHost[host]; !ok {
-			return domain.TED{}, fmt.Errorf("label for %q: no such node in the TED", host)
+	for key := range b.Labels {
+		if _, ok := byHost[key]; !ok && !byRouterID[key] {
+			return domain.TED{}, fmt.Errorf("label for %q: no such host name or router id in the TED", key)
 		}
 	}
 	var err error

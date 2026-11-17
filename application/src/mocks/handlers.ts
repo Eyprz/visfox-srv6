@@ -30,6 +30,7 @@ import {
   SWITCHER_VVF,
   cellBlocks,
   refreshVvf,
+  hotStandby,
   injectVvfConfig,
   resourcePools,
   takeIssuesOf,
@@ -450,6 +451,8 @@ export const handlers = [
       )
     const switched = setSwitcherFor(cell, true)
     if (switched.length > 0) publish({ type: 'switcher_update', switchers: switched })
+    // Cold standby: the stream stepping down is withdrawn after the switch.
+    if (!hotStandby()) refreshVvf()
     const message = previous
       ? `Take executed: ${cell.cell_id} is now ACTIVE, ${previous.cell_id} demoted to STANDBY`
       : `Take executed: ${cell.cell_id} is now ACTIVE`
@@ -565,6 +568,16 @@ export const handlers = [
         patch.metrics_dump_interval_s < 10 && {
           field: 'metrics_dump_interval_s',
           message: 'Must be 10 or more',
+        },
+      patch.assurance_interval_s !== undefined &&
+        patch.assurance_interval_s < 0 && {
+          field: 'assurance_interval_s',
+          message: 'Must be 0 or more',
+        },
+      patch.drift_action !== undefined &&
+        !['repair', 'report'].includes(patch.drift_action) && {
+          field: 'drift_action',
+          message: 'Must be repair or report',
         },
     ].filter(Boolean)
     if (errors.length > 0) return error('INVALID_PARAMS', 'Invalid config', { details: { errors } })

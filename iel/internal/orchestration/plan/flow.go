@@ -380,6 +380,9 @@ func (a Selector) allocateFeedsWith(streams []domain.SFCRequest, st State, fresh
 	trees := map[string]*tree{}
 	prevWay := func(s domain.SFCRequest, src string) []domain.Hop {
 		prev := st.Previous[s.DestinationID]
+		if src == prev.Source && len(prev.Way) > 0 {
+			return prev.Way
+		}
 		if w, ok := prev.Feeds[src]; ok {
 			return w
 		}
@@ -389,8 +392,22 @@ func (a Selector) allocateFeedsWith(streams []domain.SFCRequest, st State, fresh
 		return nil
 	}
 	direct := len(a.Resources.FlowNodes) == 0 || !a.hasRoots()
+	// stepping is, per OUT being taken without hot standby, the IN on air until the switch: its way
+	// stays in the tree during the Take, so the new IN joins the same tree and the switchers switch
+	// between the two (make-before-break). It leaves the selection once the tree is built.
+	stepping := map[string]string{}
+	if !hot && !direct {
+		for _, s := range streams {
+			prev := st.Previous[s.DestinationID]
+			if s.OnAir && fresh[s.DestinationID] && prev.Source != "" && prev.Source != s.SourceID && len(prev.Way) > 0 {
+				stepping[s.DestinationID] = prev.Source
+			}
+		}
+	}
 	rank := func(s domain.SFCRequest, src string) prevRank {
 		switch {
+		case src == stepping[s.DestinationID] && src != "":
+			return prevKeep
 		case !s.OnAir || src != s.SourceID:
 			if pack {
 				return prevTie
@@ -454,8 +471,22 @@ func (a Selector) allocateFeedsWith(streams []domain.SFCRequest, st State, fresh
 	// The on-air INs first: those that stay on air keep their ways before those being taken.
 	for _, taking := range []bool{false, true} {
 		for _, s := range streams {
-			if s.OnAir && fresh[s.DestinationID] == taking {
+			if !s.OnAir || fresh[s.DestinationID] != taking {
+				continue
+			}
+			old := stepping[s.DestinationID]
+			if old == "" {
 				place(s, []string{s.SourceID})
+				continue
+			}
+			failed := len(al.Failed)
+			place(s, []string{old, s.SourceID})
+			if t := trees[s.DestinationID]; t != nil {
+				if _, ok := t.paths[s.SourceID]; !ok && len(al.Failed) == failed {
+					// The new IN found no way beside the old one: the Take does not fit.
+					a.shortage(f, t, s, []string{s.SourceID}, [][][]domain.Hop{a.candidates(t, s.SourceID, s.DestinationID, nil, prevFirst)}, al)
+				}
+				delete(t.paths, old)
 			}
 		}
 	}

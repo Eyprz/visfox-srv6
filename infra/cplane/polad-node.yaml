@@ -1,0 +1,23 @@
+# PolaPCE (polad) for the local C-Plane lab with its TED from the node-SID feed (VISFOX_POLA_TED=node,
+# GoBGP 172.31.77.5): every node has only its node SIDs, so that dynamic paths (VISFOX_PCE_PATH=dynamic)
+# reach every node by its End SID (Pola v1.4.0 takes a node's first SRv6 SID as its node segment). The
+# IEL names the service SIDs as waypoints. Otherwise as polad.yaml.
+global:
+  pcep:
+    address: "172.31.77.2"
+    port: 4189
+  grpcServer:
+    address: "172.31.77.2"
+    port: 50052
+  log:
+    path: "/var/log/pola/"
+    name: "polad.log"
+  ted:
+    enable: true
+    source: "gobgp"
+    asn: 65000
+  gobgp:
+    grpcClient:
+      address: "172.31.77.5"
+      port: 50051
+  usidMode: false

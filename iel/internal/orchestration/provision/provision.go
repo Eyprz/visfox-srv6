@@ -41,7 +41,10 @@ func (e *Error) Unwrap() error { return e.Err }
 type Provisioner struct {
 	drivers map[domain.Op]Driver
 	// settle is the wait after the VVF configs before the switch (vvf_settle_ms).
-	settle  time.Duration
+	settle time.Duration
+	// stream is the wait after the SR Policies that start new streams, before the switch
+	// (stream_settle_ms).
+	stream  time.Duration
 	timeout time.Duration
 	sleep   func(context.Context, time.Duration) error
 }
@@ -52,13 +55,15 @@ type Options struct {
 	Drivers map[domain.Op]Driver
 	// Settle is waited after a run of function.set_params, before the next instruction.
 	Settle time.Duration
+	// StreamSettle is waited after a run of SR Policies marked NewStream, before the next instruction.
+	StreamSettle time.Duration
 	// Timeout bounds every instruction (the router timeout).
 	Timeout time.Duration
 }
 
 // New returns a Provisioner.
 func New(o Options) *Provisioner {
-	return &Provisioner{drivers: o.Drivers, settle: o.Settle, timeout: o.Timeout, sleep: sleepCtx}
+	return &Provisioner{drivers: o.Drivers, settle: o.Settle, stream: o.StreamSettle, timeout: o.Timeout, sleep: sleepCtx}
 }
 
 // Provision runs the instructions in order and stops at the first failure. It waits for every reply
@@ -76,6 +81,12 @@ func (o *Provisioner) Provision(ctx context.Context, ins []domain.Instruction) e
 		lastConfig := in.Op == domain.OpFunctionSetParams && (i+1 == len(ins) || ins[i+1].Op != domain.OpFunctionSetParams)
 		if lastConfig && o.settle > 0 && i+1 < len(ins) {
 			if err := o.sleep(ctx, o.settle); err != nil {
+				return &Error{Instruction: in, Driver: d.Name(), Err: err, Applied: ins[:i+1]}
+			}
+		}
+		lastNew := in.NewStream && (i+1 == len(ins) || !ins[i+1].NewStream)
+		if lastNew && o.stream > 0 && i+1 < len(ins) {
+			if err := o.sleep(ctx, o.stream); err != nil {
 				return &Error{Instruction: in, Driver: d.Name(), Err: err, Applied: ins[:i+1]}
 			}
 		}

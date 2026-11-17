@@ -1558,7 +1558,7 @@ components:
           example: params.r
         message:
           type: string
-          example: "must be between -255 and 255"
+          example: "must be between -1024 and 1008"
 
     # -----------------------------------------------------------------------
     # UI layout metadata (SVoT)
@@ -1611,6 +1611,15 @@ components:
         - standby: validated and waiting (can be promoted to ACTIVE at any time)
         - off: not connected logically
         - disconnected: physical failure, signal lost
+
+    DriftAction:
+      type: string
+      enum: [repair, report]
+      description: |
+        What Intent Assurance does when the network drifted from the SSoT (at startup and on every assurance interval):
+        - repair: provision the SSoT again for the OUTs that drifted (closed loop; health `remediating`, then `healthy`, or `critical` if it fails)
+        - report: only report it (the ON AIR cells of those OUTs turn `warning` until the network matches again; operation log)
+      example: repair
 
     HealthState:
       type: string
@@ -2081,8 +2090,17 @@ components:
     DynamicConfig:
       type: object
       description: Non-critical settings changeable at runtime from the GUI / REST
-      required: [sse_interval_ms, metrics_dump_interval_s, log_level]
+      required: [sse_interval_ms, metrics_dump_interval_s, log_level, assurance_interval_s, drift_action]
       properties:
+        assurance_interval_s:
+          type: integer
+          minimum: 0
+          description: |
+            Interval of the continuous Intent Assurance: the IEL reads the SR Policies (PCE) and the input selections of the
+            switcher VVFs back from the network and compares them with the SSoT. 0 = only at startup
+          example: 30
+        drift_action:
+          $ref: '#/components/schemas/DriftAction'
         sse_interval_ms:
           type: integer
           minimum: 100
@@ -2105,6 +2123,11 @@ components:
       description: Only the items to change
       minProperties: 1
       properties:
+        assurance_interval_s:
+          type: integer
+          minimum: 0
+        drift_action:
+          $ref: '#/components/schemas/DriftAction'
         sse_interval_ms:
           type: integer
           minimum: 100
@@ -2260,6 +2283,8 @@ components:
         - preset_changed: a preset was created, updated or deleted
         - config_changed: dynamic settings changed
         - switcher_update: a switcher's active input changed (Take, ...)
+        - topology_changed: the TED changed while the IEL runs (BGP-LS): sources, destinations, switchers, pools,
+          topology and pinned VVF nodes may differ; the IEL planned the streams again
         - log: system log
         - heartbeat: keep-alive (when no other event for 15 seconds)
       oneOf:
@@ -2269,6 +2294,7 @@ components:
         - $ref: '#/components/schemas/PresetChangedEvent'
         - $ref: '#/components/schemas/ConfigChangedEvent'
         - $ref: '#/components/schemas/SwitcherUpdateEvent'
+        - $ref: '#/components/schemas/TopologyChangedEvent'
         - $ref: '#/components/schemas/LogEvent'
         - $ref: '#/components/schemas/HeartbeatEvent'
       discriminator:
@@ -2280,6 +2306,7 @@ components:
           preset_changed: '#/components/schemas/PresetChangedEvent'
           config_changed: '#/components/schemas/ConfigChangedEvent'
           switcher_update: '#/components/schemas/SwitcherUpdateEvent'
+          topology_changed: '#/components/schemas/TopologyChangedEvent'
           log: '#/components/schemas/LogEvent'
           heartbeat: '#/components/schemas/HeartbeatEvent'
 
@@ -2338,6 +2365,24 @@ components:
         preset_id:
           type: string
           example: preset-caption-color
+
+    TopologyChangedEvent:
+      type: object
+      required: [type, added, removed]
+      properties:
+        type:
+          type: string
+          enum: [topology_changed]
+        added:
+          type: array
+          description: TED node ids that appeared
+          items:
+            type: string
+        removed:
+          type: array
+          description: TED node ids that disappeared (streams through them were planned again)
+          items:
+            type: string
 
     ConfigChangedEvent:
       type: object

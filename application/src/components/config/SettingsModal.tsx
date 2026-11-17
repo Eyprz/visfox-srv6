@@ -4,6 +4,7 @@ import { useT } from '../../i18n'
 import { api, ApiError, request } from '../../lib/api'
 import { notifyError } from '../../lib/errors'
 import type {
+  DriftAction,
   DynamicConfig,
   DynamicConfigPatch,
   FieldError,
@@ -17,18 +18,23 @@ import { Button } from '../common/Button'
 import { Modal } from '../common/Modal'
 
 const LOG_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error']
+const DRIFT_ACTIONS: DriftAction[] = ['repair', 'report']
 
 /** Form values as strings so number fields can be empty while typing. */
 export type ConfigForm = {
   sse_interval_ms: string
   metrics_dump_interval_s: string
   log_level: LogLevel
+  assurance_interval_s: string
+  drift_action: DriftAction
 }
 
 export const toForm = (d: DynamicConfig): ConfigForm => ({
   sse_interval_ms: String(d.sse_interval_ms),
   metrics_dump_interval_s: String(d.metrics_dump_interval_s),
   log_level: d.log_level,
+  assurance_interval_s: String(d.assurance_interval_s),
+  drift_action: d.drift_action,
 })
 
 /** Only the changed fields (PATCH semantics); null when a number field is not a number. */
@@ -36,11 +42,14 @@ export function diffConfig(base: DynamicConfig, form: ConfigForm): DynamicConfig
   const num = (v: string) => (v.trim() === '' ? NaN : Number(v))
   const sse = num(form.sse_interval_ms)
   const dump = num(form.metrics_dump_interval_s)
-  if ([sse, dump].some(Number.isNaN)) return null
+  const assurance = num(form.assurance_interval_s)
+  if ([sse, dump, assurance].some(Number.isNaN)) return null
   const patch: DynamicConfigPatch = {}
   if (sse !== base.sse_interval_ms) patch.sse_interval_ms = sse
   if (dump !== base.metrics_dump_interval_s) patch.metrics_dump_interval_s = dump
   if (form.log_level !== base.log_level) patch.log_level = form.log_level
+  if (assurance !== base.assurance_interval_s) patch.assurance_interval_s = assurance
+  if (form.drift_action !== base.drift_action) patch.drift_action = form.drift_action
   return patch
 }
 
@@ -200,6 +209,30 @@ export function SettingsModal() {
                   {LOG_LEVELS.map((l) => (
                     <option key={l} value={l}>
                       {l.toUpperCase()}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field
+                label={t('settings.assuranceInterval')}
+                hint={t('settings.assuranceIntervalHint')}
+                error={errorOf('assurance_interval_s')}
+              >
+                {numberInput('assurance_interval_s', 0)}
+              </Field>
+              <Field
+                label={t('settings.driftAction')}
+                hint={t('settings.driftActionHint')}
+                error={errorOf('drift_action')}
+              >
+                <select
+                  className={inputClass}
+                  value={form.drift_action}
+                  onChange={(e) => update({ drift_action: e.target.value as DriftAction })}
+                >
+                  {DRIFT_ACTIONS.map((a) => (
+                    <option key={a} value={a}>
+                      {t(`settings.driftAction.${a}`)}
                     </option>
                   ))}
                 </select>

@@ -125,6 +125,24 @@ func (e DestinationNodeStatus) Valid() bool {
 	}
 }
 
+// Defines values for DriftAction.
+const (
+	DriftActionRepair DriftAction = "repair"
+	DriftActionReport DriftAction = "report"
+)
+
+// Valid indicates whether the value is a known member of the DriftAction enum.
+func (e DriftAction) Valid() bool {
+	switch e {
+	case DriftActionRepair:
+		return true
+	case DriftActionReport:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ErrorCode.
 const (
 	ErrorCodeINFEASIBLEASSIGNMENT ErrorCode = "INFEASIBLE_ASSIGNMENT"
@@ -557,6 +575,21 @@ func (e TelemetryUpdateEventType) Valid() bool {
 	}
 }
 
+// Defines values for TopologyChangedEventType.
+const (
+	TopologyChangedEventTypeTopologyChanged TopologyChangedEventType = "topology_changed"
+)
+
+// Valid indicates whether the value is a known member of the TopologyChangedEventType enum.
+func (e TopologyChangedEventType) Valid() bool {
+	switch e {
+	case TopologyChangedEventTypeTopologyChanged:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TopologyNodeStatus.
 const (
 	TopologyNodeStatusCritical    TopologyNodeStatus = "critical"
@@ -911,10 +944,32 @@ type DomainPolicy struct {
 	SwitcherRequired *bool `json:"switcher_required,omitempty"`
 }
 
+// DriftAction What Intent Assurance does when the network drifted from the SSoT (at startup and on every assurance interval):
+// - repair: provision the SSoT again for the OUTs that drifted (closed loop; health `remediating`, then `healthy`, or `critical` if it fails)
+// - report: only report it (the ON AIR cells of those OUTs turn `warning` until the network matches again; operation log)
+//
+// Example: repair
+type DriftAction string
+
 // DynamicConfig Non-critical settings changeable at runtime from the GUI / REST
 type DynamicConfig struct {
+	// AssuranceIntervalS Interval of the continuous Intent Assurance: the IEL reads the SR Policies (PCE) and the input selections of the
+	// switcher VVFs back from the network and compares them with the SSoT. 0 = only at startup
+	//
+	//
+	// Example: 30
+	AssuranceIntervalS int `json:"assurance_interval_s"`
+
 	// DefaultSla Not used in v1 (for SLA evaluation in v2)
 	DefaultSla *SLA `json:"default_sla,omitempty"`
+
+	// DriftAction What Intent Assurance does when the network drifted from the SSoT (at startup and on every assurance interval):
+	// - repair: provision the SSoT again for the OUTs that drifted (closed loop; health `remediating`, then `healthy`, or `critical` if it fails)
+	// - report: only report it (the ON AIR cells of those OUTs turn `warning` until the network matches again; operation log)
+	//
+	//
+	// Example: repair
+	DriftAction DriftAction `json:"drift_action"`
 
 	// LogLevel Example: info
 	LogLevel LogLevel `json:"log_level"`
@@ -932,8 +987,18 @@ type DynamicConfig struct {
 
 // DynamicConfigPatch Only the items to change
 type DynamicConfigPatch struct {
+	AssuranceIntervalS *int `json:"assurance_interval_s,omitempty"`
+
 	// DefaultSla Not used in v1 (for SLA evaluation in v2)
 	DefaultSla *SLA `json:"default_sla,omitempty"`
+
+	// DriftAction What Intent Assurance does when the network drifted from the SSoT (at startup and on every assurance interval):
+	// - repair: provision the SSoT again for the OUTs that drifted (closed loop; health `remediating`, then `healthy`, or `critical` if it fails)
+	// - report: only report it (the ON AIR cells of those OUTs turn `warning` until the network matches again; operation log)
+	//
+	//
+	// Example: repair
+	DriftAction *DriftAction `json:"drift_action,omitempty"`
 
 	// LogLevel Example: info
 	LogLevel             *LogLevel `json:"log_level,omitempty"`
@@ -1003,7 +1068,7 @@ type FieldError struct {
 	// Field Example: params.r
 	Field *string `json:"field,omitempty"`
 
-	// Message Example: must be between -255 and 255
+	// Message Example: must be between -1024 and 1008
 	Message string `json:"message"`
 }
 
@@ -1718,14 +1783,16 @@ type SourceNode struct {
 type SourceNodeStatus string
 
 // SseEvent JSON of the SSE `data:`. `type` equals the SSE `event:` field.
-// - matrix_update: a cell's execution state, preset or live_chain changed (the whole cell)
-// - telemetry_update: telemetry and health of every cell (every sse_interval_ms)
-// - rollback: an automatic rollback started (in_progress) or finished (succeeded / failed)
-// - preset_changed: a preset was created, updated or deleted
-// - config_changed: dynamic settings changed
-// - switcher_update: a switcher's active input changed (Take, ...)
-// - log: system log
-// - heartbeat: keep-alive (when no other event for 15 seconds)
+//   - matrix_update: a cell's execution state, preset or live_chain changed (the whole cell)
+//   - telemetry_update: telemetry and health of every cell (every sse_interval_ms)
+//   - rollback: an automatic rollback started (in_progress) or finished (succeeded / failed)
+//   - preset_changed: a preset was created, updated or deleted
+//   - config_changed: dynamic settings changed
+//   - switcher_update: a switcher's active input changed (Take, ...)
+//   - topology_changed: the TED changed while the IEL runs (BGP-LS): sources, destinations, switchers, pools,
+//     topology and pinned VVF nodes may differ; the IEL planned the streams again
+//   - log: system log
+//   - heartbeat: keep-alive (when no other event for 15 seconds)
 type SseEvent struct {
 	union json.RawMessage
 }
@@ -1848,6 +1915,19 @@ type Topology struct {
 	Links []TopologyLink `json:"links"`
 	Nodes []TopologyNode `json:"nodes"`
 }
+
+// TopologyChangedEvent defines model for TopologyChangedEvent.
+type TopologyChangedEvent struct {
+	// Added TED node ids that appeared
+	Added []string `json:"added"`
+
+	// Removed TED node ids that disappeared (streams through them were planned again)
+	Removed []string                 `json:"removed"`
+	Type    TopologyChangedEventType `json:"type"`
+}
+
+// TopologyChangedEventType defines model for TopologyChangedEvent.Type.
+type TopologyChangedEventType string
 
 // TopologyLink defines model for TopologyLink.
 type TopologyLink struct {
@@ -2339,6 +2419,40 @@ func (t *SseEvent) MergeSwitcherUpdateEvent(v SwitcherUpdateEvent) error {
 	return err
 }
 
+// AsTopologyChangedEvent returns the union data inside the SseEvent as a TopologyChangedEvent
+func (t SseEvent) AsTopologyChangedEvent() (TopologyChangedEvent, error) {
+	var body TopologyChangedEvent
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromTopologyChangedEvent overwrites any union data inside the SseEvent as the provided TopologyChangedEvent
+func (t *SseEvent) FromTopologyChangedEvent(v TopologyChangedEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"topology_changed"}`))
+	t.union = b
+	return err
+}
+
+// MergeTopologyChangedEvent performs a merge with any union data inside the SseEvent, using the provided TopologyChangedEvent
+func (t *SseEvent) MergeTopologyChangedEvent(v TopologyChangedEvent) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	b, err = runtime.JSONMerge(b, []byte(`{"type":"topology_changed"}`))
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
 // AsLogEvent returns the union data inside the SseEvent as a LogEvent
 func (t SseEvent) AsLogEvent() (LogEvent, error) {
 	var body LogEvent
@@ -2437,6 +2551,8 @@ func (t SseEvent) ValueByDiscriminator() (interface{}, error) {
 		return t.AsSwitcherUpdateEvent()
 	case "telemetry_update":
 		return t.AsTelemetryUpdateEvent()
+	case "topology_changed":
+		return t.AsTopologyChangedEvent()
 	default:
 		return nil, errors.New("unknown discriminator value: " + discriminator)
 	}

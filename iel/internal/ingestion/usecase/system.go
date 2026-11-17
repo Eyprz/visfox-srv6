@@ -259,7 +259,8 @@ func (u UpdateConfig) Run(ctx context.Context, p apitypes.DynamicConfigPatch) (a
 	s := u.env
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p.SseIntervalMs == nil && p.MetricsDumpIntervalS == nil && p.LogLevel == nil && p.DefaultSla == nil {
+	if p.SseIntervalMs == nil && p.MetricsDumpIntervalS == nil && p.LogLevel == nil && p.DefaultSla == nil &&
+		p.AssuranceIntervalS == nil && p.DriftAction == nil {
 		return apitypes.SystemConfig{}, domain.Fail(apitypes.ErrorCodeINVALIDREQUEST, "At least one property is required")
 	}
 	var errs []apitypes.FieldError
@@ -269,6 +270,12 @@ func (u UpdateConfig) Run(ctx context.Context, p apitypes.DynamicConfigPatch) (a
 	}
 	if p.MetricsDumpIntervalS != nil && *p.MetricsDumpIntervalS < 10 {
 		bad("metrics_dump_interval_s", "Must be 10 or more")
+	}
+	if p.AssuranceIntervalS != nil && *p.AssuranceIntervalS < 0 {
+		bad("assurance_interval_s", "Must be 0 or more")
+	}
+	if p.DriftAction != nil && !p.DriftAction.Valid() {
+		bad("drift_action", "Must be repair or report")
 	}
 	if p.LogLevel != nil {
 		if !report.KnownLevel(*p.LogLevel) {
@@ -291,6 +298,12 @@ func (u UpdateConfig) Run(ctx context.Context, p apitypes.DynamicConfigPatch) (a
 	}
 	if p.DefaultSla != nil {
 		next.DefaultSla = p.DefaultSla
+	}
+	if p.AssuranceIntervalS != nil {
+		next.AssuranceIntervalS = *p.AssuranceIntervalS
+	}
+	if p.DriftAction != nil {
+		next.DriftAction = *p.DriftAction
 	}
 	if err := s.store.PutDynamicConfig(ctx, next); err != nil {
 		return apitypes.SystemConfig{}, domain.Internal(err)

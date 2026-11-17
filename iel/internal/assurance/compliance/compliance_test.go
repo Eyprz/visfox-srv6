@@ -1,6 +1,7 @@
 package compliance
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/eyprz/visfox-srv6/iel/internal/domain"
@@ -24,5 +25,21 @@ func TestAssess(t *testing.T) {
 	}
 	if c := d.Colors(); len(c) != 3 || c[0] != 101 || c[2] != 103 {
 		t.Fatalf("colors = %v", c)
+	}
+}
+
+func TestAssessSwitchers(t *testing.T) {
+	var d Drift
+	d.AssessSwitchers([]domain.Selection{
+		{DestinationID: "out-1", Node: "sw-1", Next: 2},
+		{DestinationID: "out-1", Node: "sw-2", Next: 0},
+		{DestinationID: "out-2", Node: "sw-3", Next: 1},
+	}, map[string]int{"sw-1": 1, "sw-2": 0})
+	if d.None() || len(d.Switchers) != 1 || d.Switchers[0].Node != "sw-1" || d.Switchers[0].Next != 1 ||
+		d.Switchers[0].DestinationID != "out-1" {
+		t.Fatalf("drift = %+v", d)
+	}
+	if !strings.Contains(d.String(), "sw-1 sends on input b") {
+		t.Fatalf("String() = %s", d)
 	}
 }

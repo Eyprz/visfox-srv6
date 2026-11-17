@@ -33,6 +33,9 @@ type Instruction struct {
 	Functions []FunctionConfig
 	// Note says why the instruction is there, for logs (e.g. "swap main stream tail").
 	Note string
+	// NewStream marks an SR Policy that starts a stream not flowing yet (a cold standby Take): the
+	// provisioner waits for it to reach the switchers (stream_settle_ms) before the switch.
+	NewStream bool `json:",omitempty"`
 }
 
 // SRPolicy is an explicit-path SR Policy (RFC 9256). A headend identifies it by color and endpoint.
@@ -44,12 +47,23 @@ type SRPolicy struct {
 	Color    uint32
 	// SegmentList holds the SIDs with their arguments, in order.
 	SegmentList []string
+	// Computed is the Segment List the PCE computed through SegmentList as waypoints (dynamic path,
+	// read back from the PCE; empty for explicit paths).
+	Computed []string `json:",omitempty"`
 }
 
 // SwitcherSelect selects a switcher input: Next is the D4S index (0 = first input, swap off).
 type SwitcherSelect struct {
 	Port string
 	Next int
+}
+
+// Selection is the input a switcher VVF (select) sends on for an OUT: what the SSoT needs, compared
+// with what the switcher reports (Intent Assurance).
+type Selection struct {
+	DestinationID string
+	Node          string
+	Next          int
 }
 
 // FunctionConfig is one function of a VVF node with its parameters.

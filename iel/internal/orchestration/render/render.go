@@ -295,14 +295,25 @@ func (p Renderer) Realize(destinationID string, req *domain.SFCRequest, sfp doma
 			}
 			if l.Carrier {
 				carriers = append(carriers, set(pol, "main stream carries the path after the swap switcher"))
-			} else {
-				plan.Instructions = append(plan.Instructions, set(pol, ""))
+				continue
 			}
+			in := set(pol, "")
+			if _, ok := have[PolicyKey(pol)]; take && !ok && len(sfp.Way) > 0 {
+				// Not fed before (cold standby): the stream must reach the switchers before they
+				// switch to it.
+				in.NewStream = true
+				in.Note = "new stream"
+			}
+			plan.Instructions = append(plan.Instructions, in)
 		}
 	}
 
 	// Feeds: new ones go first (they are not on air), changed ones after the switch.
 	var changed []domain.Instruction
+	decapOf := ""
+	if dst, ok := p.Resources.Destination(destinationID); ok {
+		decapOf = dst.NodeID
+	}
 	for _, src := range slices.Sorted(maps.Keys(sfp.Feeds)) {
 		if src == onAir {
 			continue
@@ -312,9 +323,18 @@ func (p Renderer) Realize(destinationID string, req *domain.SFCRequest, sfp doma
 			return domain.Plan{}, err
 		}
 		for _, l := range legs {
-			pol := p.Policy(l, destinationID)
-			if l.Carrier || keep[PolicyKey(pol)] {
+			if l.Carrier {
 				continue // the main stream of a swap switcher belongs to the on-air stream
+			}
+			if l.Endpoint == decapOf {
+				// A feed ends at the input of the OUT's root switcher: when that switcher still selects
+				// it with nothing on air, it goes no further. The policy keeps its endpoint, so a Take
+				// updates the same policy (same headend flow) to the whole path.
+				l.Segments = l.Segments[:len(l.Segments)-1]
+			}
+			pol := p.Policy(l, destinationID)
+			if keep[PolicyKey(pol)] {
+				continue
 			}
 			keep[PolicyKey(pol)] = true
 			if _, ok := have[PolicyKey(pol)]; !ok {
@@ -341,7 +361,16 @@ func (p Renderer) Realize(destinationID string, req *domain.SFCRequest, sfp doma
 	plan.Release = changed
 	for _, key := range slices.Sorted(maps.Keys(have)) {
 		pol := have[key]
-		if keep[key] || p.isMainHeadend(pol.Headend) {
+		if keep[key] {
+			continue
+		}
+		if p.isMainHeadend(pol.Headend) {
+			// The main stream of a swap switcher keeps sending; with nothing on air it ends at the
+			// switcher, like a feed.
+			if onAir == "" && len(pol.SegmentList) > 1 {
+				pol.SegmentList = pol.SegmentList[:1]
+				plan.Release = append(plan.Release, set(pol, "main stream ends at the swap switcher"))
+			}
 			continue
 		}
 		plan.Release = append(plan.Release, domain.Instruction{Op: domain.OpSRPolicyDelete, Target: pol.Headend, Policy: &pol})

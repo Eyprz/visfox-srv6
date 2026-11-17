@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"slices"
 
 	"go.yaml.in/yaml/v3"
 
@@ -22,7 +23,8 @@ type Operator struct {
 	SIDRule      ted.Rule      `yaml:"sid_rule"`
 	Sources      []ted.Binding `yaml:"sources"`
 	Destinations []ted.Binding `yaml:"destinations"`
-	// Labels are display names for some nodes (host name -> name), e.g. pinned caption materials.
+	// Labels are display names for some nodes (host name or router id -> name), e.g. pinned caption
+	// materials.
 	Labels map[string]string `yaml:"labels"`
 	// Wiring is the physical wiring of the input ports of the VVF nodes that control the stream flow
 	// (switchers; testbed constraint).
@@ -58,6 +60,11 @@ const (
 	// DriverMGMT controls the VVFs over their routers' MGMT REST API, a provisional M-plane until a
 	// component manages the SR functions (internal/sbi/vvf).
 	DriverMGMT = "mgmt"
+
+	// PathExplicit sends the IEL's Segment Lists to PolaPCE as they are.
+	PathExplicit = "explicit"
+	// PathDynamic lets PolaPCE compute the paths, through the IEL's SIDs as waypoints.
+	PathDynamic = "dynamic"
 )
 
 // Orchestrator is the southbound part of the network operator config.
@@ -76,6 +83,14 @@ type Orchestrator struct {
 		// SIDValidate makes Pola check the SIDs against its TED (BGP-LS). Leave it off while the
 		// IEL's TED is static (v1): Pola's TED does not know those SIDs.
 		SIDValidate bool `yaml:"sid_validate"`
+		// Path is how SR Policies reach the endpoint: "explicit" (default: the IEL's Segment List
+		// as is; the IGP routes between its SIDs) or "dynamic" (PolaPCE computes the path, with the
+		// SIDs of the IEL's Segment List as waypoints; needs the TED in Pola, BGP-LS). Policies that
+		// end before the endpoint (STANDBY feeds) stay explicit.
+		Path string `yaml:"path"`
+		// Metric is what PolaPCE minimizes for dynamic paths: "igp" (default), "te", "delay" or
+		// "hopcount".
+		Metric string `yaml:"metric"`
 	} `yaml:"polapce"`
 	// Nodes maps advertised host names to their addresses: the PCEP session (PCC) and SRv6 address
 	// of every headend, and the SRv6 address of every policy endpoint (decap; switchers in swap
@@ -85,6 +100,9 @@ type Orchestrator struct {
 	ColorBase uint32 `yaml:"color_base"`
 	// VVFSettleMs is waited after the VVF configs of a Take, before the switch.
 	VVFSettleMs int `yaml:"vvf_settle_ms"`
+	// StreamSettleMs is waited at a Take that starts a stream not flowing yet (cold standby), after
+	// its SR Policy and before the switch, so that the stream reaches the switchers first.
+	StreamSettleMs int `yaml:"stream_settle_ms"`
 }
 
 // NodeAddress is a node's PCEP session address (headends only), SRv6 address, and the base URL of
@@ -135,6 +153,19 @@ func LoadOperator(path string) (Operator, error) {
 	default:
 		return Operator{}, fmt.Errorf("operator config %s: unknown orchestrator.sr_policy %q", path, o.Orchestrator.SRPolicy)
 	}
+	pp := &o.Orchestrator.PolaPCE
+	if pp.Path == "" {
+		pp.Path = PathExplicit
+	}
+	if pp.Path != PathExplicit && pp.Path != PathDynamic {
+		return Operator{}, fmt.Errorf("operator config %s: unknown orchestrator.polapce.path %q", path, pp.Path)
+	}
+	if pp.Metric == "" {
+		pp.Metric = "igp"
+	}
+	if !slices.Contains([]string{"igp", "te", "delay", "hopcount"}, pp.Metric) {
+		return Operator{}, fmt.Errorf("operator config %s: unknown orchestrator.polapce.metric %q", path, pp.Metric)
+	}
 	switch o.Orchestrator.VVF {
 	case "":
 		o.Orchestrator.VVF = DriverDryRun
@@ -161,8 +192,9 @@ func LoadOperator(path string) (Operator, error) {
 }
 
 // Override applies the CLI / environment overrides of the southbound drivers: srPolicy and vvf
-// replace the config's drivers when set; dryRun sends everything to the dry-run driver.
-func (o *Operator) Override(srPolicy, vvf string, dryRun bool) error {
+// replace the config's drivers and pcePath its PCE path mode when set; dryRun sends everything to
+// the dry-run driver.
+func (o *Operator) Override(srPolicy, vvf, pcePath string, dryRun bool) error {
 	if srPolicy != "" {
 		if srPolicy != DriverDryRun && srPolicy != DriverPolaPCE {
 			return fmt.Errorf("unknown SR Policy driver %q", srPolicy)
@@ -177,6 +209,12 @@ func (o *Operator) Override(srPolicy, vvf string, dryRun bool) error {
 			return fmt.Errorf("unknown VVF driver %q", vvf)
 		}
 		o.Orchestrator.VVF = vvf
+	}
+	if pcePath != "" {
+		if pcePath != PathExplicit && pcePath != PathDynamic {
+			return fmt.Errorf("unknown PCE path %q", pcePath)
+		}
+		o.Orchestrator.PolaPCE.Path = pcePath
 	}
 	if dryRun {
 		o.Orchestrator.SRPolicy, o.Orchestrator.VVF = DriverDryRun, DriverDryRun

@@ -413,7 +413,13 @@ export const fedOf = (st: Stream): string[] => [
  */
 const allocation = new Map<
   string,
-  { switchers: string[]; nodes: (string | undefined)[]; feeds: Record<string, string[]> }
+  {
+    switchers: string[]
+    nodes: (string | undefined)[]
+    feeds: Record<string, string[]>
+    /** The IN on air when the stream was allocated ('' when none). */
+    source: string
+  }
 >()
 
 /**
@@ -485,7 +491,8 @@ export function switcherPaths(sourceId: string, destinationId: string): Switcher
  *
  * `fresh` names streams being taken: their blocks avoid nodes that run another config now (the ON
  * AIR cell's), so the new config can be injected before the switch without touching the picture on
- * air. Only when no such node is free do they reuse one.
+ * air. Only when no such node is free do they reuse one, never a node of the OUT's picture on air
+ * (its previous ON AIR stream): without another node the Take does not fit.
  */
 export function allocateNodes(
   streams: Stream[],
@@ -510,6 +517,9 @@ export function allocateNodes(
     Boolean(options.fresh?.has(key)) &&
     configured.has(node.id) &&
     configured.get(node.id) !== config
+  // The node carries the OUT's picture until the switch.
+  const pictureOf = (key: string, node: VvfNode) =>
+    Boolean(allocation.get(key)?.source) && (allocation.get(key)?.nodes ?? []).includes(node.id)
   const fits = (node: VvfNode, config: string) => {
     const l = load.get(node.id)
     return !l || (l.config === config && l.streams < (node.max_streams ?? Infinity))
@@ -554,7 +564,8 @@ export function allocateNodes(
           n.vvf_id === block.vvfId &&
           (block.pinned === undefined || n.id === block.pinned) &&
           !used.get(key)!.has(n.id) &&
-          fits(n, config),
+          fits(n, config) &&
+          !(busyElse(key, n, config) && pictureOf(key, n)),
       )
       const quiet = all.filter((n) => !busyElse(key, n, config))
       const candidates = quiet.length > 0 ? quiet : all
@@ -618,11 +629,29 @@ function allocateFeedsWith(
   const record = (id: string, key: string) => users.set(id, [...(users.get(id) ?? []), key])
   const previous = (st: Stream) => allocation.get(st.destinationId)
   const prevWay = (st: Stream, src: string) => previous(st)?.feeds[src]
+  // Cold standby: during a Take the IN stepping down stays in the OUT's tree on its way, so the new IN
+  // joins the same switchers and the picture switches once (the two-step Take).
+  const stepping = (st: Stream): string | undefined => {
+    const old = previous(st)?.source
+    const taken = fresh?.has(st.destinationId) ?? false
+    return !hotStandby() &&
+      taken &&
+      st.onAir &&
+      old &&
+      old !== st.cell.source_id &&
+      prevWay(st, old)?.length
+      ? old
+      : undefined
+  }
+  const wantOf = (st: Stream): string[] => {
+    const old = stepping(st)
+    return old ? [...new Set([...fedOf(st), old])] : fedOf(st)
+  }
   // IN unicasts: streams that had the IN keep it, then the rest in matrix order.
   const fed = new Map<string, string[]>()
   for (const keep of [true, false])
     for (const st of streams)
-      for (const src of fedOf(st)) {
+      for (const src of wantOf(st)) {
         if (Boolean(prevWay(st, src)) !== keep) continue
         if (count(sourceKey(src)) >= UNICASTS_PER_SOURCE) {
           failed.push({
@@ -647,11 +676,11 @@ function allocateFeedsWith(
   for (const st of ordered) {
     // The switchers are checked for every IN the stream wants, also those without a free unicast:
     // a shortage of both is reported as both. Only the INs that are sent get ways.
-    const want = fedOf(st)
+    const want = wantOf(st)
     const srcs = fed.get(st.destinationId) ?? []
     if (want.length === 0) continue
     const taken = fresh?.has(st.destinationId) ?? false
-    const keepOnAir = st.onAir && !taken ? st.cell.source_id : undefined
+    const keepOnAir = st.onAir && !taken ? st.cell.source_id : stepping(st)
     const taking = st.onAir && taken ? st.cell.source_id : undefined
     let tree = feedTree(st, want, keepOnAir, taking, pack, users)
     if ('kind' in tree && constraints.domain.switcher_required)
@@ -881,9 +910,10 @@ const takeChange = (cell: MatrixCell): CellChange => ({
 /** Every reason the cell cannot be taken now (standby cells only; empty: Take is possible). */
 export function takeIssuesOf(cell: MatrixCell): ValidationIssue[] {
   if (cell.execution_state !== 'standby') return []
-  // The IN unicast, switcher and VVF node pools after the Take (with hot standby the IN and the
-  // switchers are reserved at STANDBY already).
-  return capacityIssuesWith(takeChange(cell), cell.destination_id)
+  // The IN unicast, switcher and VVF node pools during the Take (with hot standby the IN and the
+  // switchers are reserved at STANDBY already; with cold standby the IN stepping down still flows).
+  const fresh = new Set([cell.destination_id])
+  return capacityIssues(allocateNodes(streamsOf(takeChange(cell)), { fresh }), cell.destination_id)
 }
 
 /** The STANDBY cells whose IN is sent into the switchers (hot standby) and the switchers on its way. */
@@ -1042,6 +1072,7 @@ export function refreshVvf(options: { fresh?: Set<string> } = {}): void {
       feeds: Object.fromEntries(
         [...(feeds.get(key) ?? [])].map(([src, way]) => [src, way.map(hopKey)]),
       ),
+      source: streams.find((st) => st.destinationId === key && st.onAir)?.cell.source_id ?? '',
     })
   // Nodes no ON AIR stream uses any more keep no live config.
   const live = new Set(

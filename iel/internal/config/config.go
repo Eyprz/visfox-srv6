@@ -36,6 +36,8 @@ type Immutable struct {
 	SRPolicyDriver string
 	// VVFDriver overrides orchestrator.vvf ("dryrun" / "mgmt"); empty keeps the file's.
 	VVFDriver string
+	// PCEPath overrides orchestrator.polapce.path ("explicit" / "dynamic"); empty keeps the file's.
+	PCEPath string
 	// DryRun sends every southbound instruction to the dry-run driver (health checks, validation,
 	// demos), whatever the network operator config selects.
 	DryRun bool
@@ -58,6 +60,8 @@ func Load(args []string) (Immutable, error) {
 		"SR Policy driver, dryrun or polapce; overrides the network operator config (env VISFOX_SR_POLICY)")
 	vvf := fs.String("vvf", env("VISFOX_VVF", ""),
 		"VVF control driver, dryrun or mgmt; overrides the network operator config (env VISFOX_VVF)")
+	pcePath := fs.String("pce-path", env("VISFOX_PCE_PATH", ""),
+		"SR Policy paths, explicit (the IEL's Segment Lists) or dynamic (computed by PolaPCE); overrides the network operator config (env VISFOX_PCE_PATH)")
 	dryRun := fs.Bool("dry-run", env("VISFOX_DRY_RUN", "") == "true" || env("VISFOX_DRY_RUN", "") == "1",
 		"log every southbound instruction instead of sending it (env VISFOX_DRY_RUN)")
 	if err := fs.Parse(args); err != nil {
@@ -83,6 +87,7 @@ func Load(args []string) (Immutable, error) {
 		RouterTimeout:      rt,
 		SRPolicyDriver:     *srPolicy,
 		VVFDriver:          *vvf,
+		PCEPath:            *pcePath,
 		DryRun:             *dryRun,
 	}, nil
 }

@@ -3,8 +3,9 @@
 // SIDs, links with IGP metrics), originates it as BGP-LS routes (RFC 9552 node, link and prefix
 // NLRIs, RFC 9514 SRv6 SID NLRIs) in an embedded GoBGP speaker and advertises them over an iBGP
 // session to the lab's GoBGP, as a router exporting its IGP over BGP-LS would. PolaPCE (ted.source:
-// gobgp, which follows routes received from peers) and the IEL read their TED from there. It is a
-// test tool for VISFOX-SRv6, not part of the IEL.
+// gobgp, which follows routes received from peers) and the IEL read their TED from there.
+// FAKEBGPLS_SIDS=node advertises only the node SIDs (NodeSIDsOnly), for a PCE that computes dynamic
+// paths. It is a test tool for VISFOX-SRv6, not part of the IEL.
 package main
 
 import (
@@ -102,6 +103,14 @@ func run(log *slog.Logger) error {
 	if err := yaml.Unmarshal(raw, &ted); err != nil {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
+	sids := env("FAKEBGPLS_SIDS", "all")
+	switch sids {
+	case "all":
+	case "node":
+		ted = NodeSIDsOnly(ted)
+	default:
+		return fmt.Errorf("FAKEBGPLS_SIDS: %q is neither all nor node", sids)
+	}
 	paths, err := Paths(ted, uint32(asn))
 	if err != nil {
 		return err
@@ -135,10 +144,34 @@ func run(log *slog.Logger) error {
 			return fmt.Errorf("add BGP-LS route: %w", err)
 		}
 	}
-	log.Info("BGP-LS routes originated", "ted", path, "nodes", len(ted.Nodes), "links", len(ted.Links),
+	log.Info("BGP-LS routes originated", "ted", path, "sids", sids, "nodes", len(ted.Nodes), "links", len(ted.Links),
 		"routes", len(paths), "peer", peer)
 	<-ctx.Done()
 	return speaker.StopBgp(context.Background(), &api.StopBgpRequest{})
+}
+
+// NodeSIDsOnly keeps one kind of SID per node: its End SIDs (node SIDs) when it has any, all of them
+// otherwise (a decap that advertises only its End.DT6). It is the TED a PCE gets when its feed leaves
+// out the service SIDs (VVF functions, switcher input ports): PolaPCE v1.4.0 takes the first SRv6
+// SID of a node as its node segment, whatever its behavior, so with service SIDs in its TED a
+// dynamic path may enter a switcher through the wrong input port. The IEL names the service SIDs
+// itself, as waypoints.
+func NodeSIDsOnly(t TED) TED {
+	out := t
+	out.Nodes = make([]Node, len(t.Nodes))
+	for i, n := range t.Nodes {
+		var end []SID
+		for _, s := range n.SIDs {
+			if s.Behavior == "End" {
+				end = append(end, s)
+			}
+		}
+		if len(end) > 0 {
+			n.SIDs = end
+		}
+		out.Nodes[i] = n
+	}
+	return out
 }
 
 // localAPI is the embedded speaker's gRPC API (local only).

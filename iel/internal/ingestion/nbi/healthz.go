@@ -10,7 +10,7 @@ import (
 )
 
 // Version is the IEL version reported by /healthz.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // GetHealthzEndpoint serves getHealthz: GET /healthz. started is the process start time.
 func GetHealthzEndpoint(started time.Time) echo.HandlerFunc {

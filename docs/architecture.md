@@ -134,7 +134,8 @@ Both hot and cold standby are checked this way.
 - At startup and every `assurance_interval_s` (a runtime setting, 0 = startup only) the IEL reads the SR
   Policies back from PolaPCE and the inputs of the switcher VVFs from their routers, and compares them
   with the SSoT. The network is read without blocking operations; a pass that overlaps a change is
-  dropped.
+  dropped. Before the startup pass the IEL waits until PolaPCE has its PCEP sessions and TED
+  (`VISFOX_PCE_READY_TIMEOUT`, 5 s by default), so a Pola started with it does not fail the first repair.
 - What happens on drift is the runtime setting `drift_action`: `repair` provisions the OUTs that drifted
   again and withdraws policies the SSoT does not have (the cell shows remediating, then healthy or
   critical); `report` sends nothing and turns the ON AIR cells of those OUTs yellow (warning) until the

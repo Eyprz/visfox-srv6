@@ -21,8 +21,8 @@ The `cplane` Compose profile starts a control plane next to the IEL:
 ```text
 visfox_iel --gRPC--> visfox_polad (PolaPCE, 172.31.77.2)
     |                  |  ^ TED (routes received from peers)
-    | TED at startup   |  |
-    | (lab, gRPC)      |  visfox_gobgpd (GoBGP, 172.31.77.3)
+    | TED (lab, gRPC:  |  |
+    | startup + passes)|  visfox_gobgpd (GoBGP, 172.31.77.3)
     +------------------|--^
                        |  ^ iBGP, BGP-LS
                        |  visfox_bgpls (stand-in BGP-LS speaker, 172.31.77.4)

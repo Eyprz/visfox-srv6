@@ -596,7 +596,7 @@ export const handlers = [
   http.get(`${API}/healthz`, () =>
     HttpResponse.json({
       status: 'ok',
-      version: '0.2.0-mock',
+      version: '0.2.1-mock',
       uptime_s: Math.round((Date.now() - startedAt) / 1000),
     }),
   ),

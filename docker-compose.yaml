@@ -65,6 +65,8 @@ services:
       # SR Policy paths with polapce: explicit (the IEL's Segment Lists) or dynamic (PolaPCE computes
       # them through the IEL's SIDs as waypoints; use VISFOX_POLA_TED=node). Unset keeps the config's.
       VISFOX_PCE_PATH: ${VISFOX_PCE_PATH:-}
+      # How long startup waits for PolaPCE (PCEP sessions, TED) before the first repair; 0 = no wait.
+      VISFOX_PCE_READY_TIMEOUT: ${VISFOX_PCE_READY_TIMEOUT:-5s}
       # true: log every southbound instruction instead of sending it (checks, validation, demos).
       VISFOX_DRY_RUN: ${VISFOX_DRY_RUN:-false}
       # Network the IEL runs on: unset = the testbed (db/ted.yaml, config/operator.yaml), rich = plenty

@@ -45,6 +45,20 @@ func TestLoadRouterTimeout(t *testing.T) {
 	}
 }
 
+func TestLoadPCEReadyTimeout(t *testing.T) {
+	cfg, err := Load(nil)
+	if err != nil || cfg.PCEReadyTimeout.Seconds() != 5 {
+		t.Fatalf("default = %v, %v", cfg.PCEReadyTimeout, err)
+	}
+	t.Setenv("VISFOX_PCE_READY_TIMEOUT", "0")
+	if cfg, err := Load(nil); err != nil || cfg.PCEReadyTimeout != 0 {
+		t.Fatalf("0 = %v, %v", cfg.PCEReadyTimeout, err)
+	}
+	if _, err := Load([]string{"-pce-ready-timeout", "-1s"}); err == nil {
+		t.Fatal("expected an error for a negative timeout")
+	}
+}
+
 func TestLoadDrivers(t *testing.T) {
 	t.Setenv("VISFOX_VVF", "mgmt")
 	t.Setenv("VISFOX_DRY_RUN", "true")

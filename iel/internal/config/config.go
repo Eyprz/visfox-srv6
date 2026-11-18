@@ -31,6 +31,9 @@ type Immutable struct {
 	PresetsSeedPath string
 	// RouterTimeout bounds every southbound request (orchestrator drivers).
 	RouterTimeout time.Duration
+	// PCEReadyTimeout bounds the wait at startup until PolaPCE can take SR Policies (PCEP sessions
+	// with the headends, its TED); 0 does not wait.
+	PCEReadyTimeout time.Duration
 	// SRPolicyDriver overrides orchestrator.sr_policy of the network operator config ("dryrun" /
 	// "polapce"); empty keeps the file's.
 	SRPolicyDriver string
@@ -56,6 +59,8 @@ func Load(args []string) (Immutable, error) {
 	presets := fs.String("presets-seed", env("VISFOX_PRESETS_SEED", "db/presets.yaml"),
 		"presets inserted on the first start (env VISFOX_PRESETS_SEED)")
 	timeout := fs.String("router-timeout", env("VISFOX_ROUTER_TIMEOUT", "3s"), "southbound request timeout (env VISFOX_ROUTER_TIMEOUT)")
+	pceReady := fs.String("pce-ready-timeout", env("VISFOX_PCE_READY_TIMEOUT", "5s"),
+		"how long startup waits for PolaPCE to take SR Policies, 0 for no wait (env VISFOX_PCE_READY_TIMEOUT)")
 	srPolicy := fs.String("sr-policy", env("VISFOX_SR_POLICY", ""),
 		"SR Policy driver, dryrun or polapce; overrides the network operator config (env VISFOX_SR_POLICY)")
 	vvf := fs.String("vvf", env("VISFOX_VVF", ""),
@@ -76,6 +81,10 @@ func Load(args []string) (Immutable, error) {
 	if err != nil || rt <= 0 {
 		return Immutable{}, fmt.Errorf("invalid router timeout %q", *timeout)
 	}
+	pr, err := time.ParseDuration(*pceReady)
+	if err != nil || pr < 0 {
+		return Immutable{}, fmt.Errorf("invalid PCE ready timeout %q", *pceReady)
+	}
 	return Immutable{
 		ListenAddr:         *listen,
 		LogLevel:           lv,
@@ -85,6 +94,7 @@ func Load(args []string) (Immutable, error) {
 		CatalogPath:        *catalog,
 		PresetsSeedPath:    *presets,
 		RouterTimeout:      rt,
+		PCEReadyTimeout:    pr,
 		SRPolicyDriver:     *srPolicy,
 		VVFDriver:          *vvf,
 		PCEPath:            *pcePath,

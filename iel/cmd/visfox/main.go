@@ -125,7 +125,7 @@ func run() error {
 		saveTED = func(ctx context.Context, t domain.TED) error { return ted.Save(ctx, store, t) }
 	}
 
-	prov, mon, switches, closeSBI, err := newProvisioner(op.Orchestrator, res, cfg.RouterTimeout, logger)
+	prov, mon, switches, closeSBI, err := newProvisioner(ctx, op.Orchestrator, res, cfg.RouterTimeout, cfg.PCEReadyTimeout, logger)
 	if err != nil {
 		return err
 	}
@@ -189,7 +189,7 @@ func openDB(ctx context.Context, path string) (*sql.DB, error) {
 // process VVFs) to the routers' MGMT REST API (VVF control client), or either is dry-run (logged).
 // With PolaPCE the PCE client is also the monitor Intent Assurance reads the SR Policies from, with
 // mgmt the VVF control client the one it reads the switcher inputs from (nil when dry-run).
-func newProvisioner(oc config.Orchestrator, res *ssot.Resources, timeout time.Duration, logger *slog.Logger) (*provision.Provisioner, monitor.SRPolicySource, monitor.SwitcherSource, func(), error) {
+func newProvisioner(ctx context.Context, oc config.Orchestrator, res *ssot.Resources, timeout, ready time.Duration, logger *slog.Logger) (*provision.Provisioner, monitor.SRPolicySource, monitor.SwitcherSource, func(), error) {
 	dry := dryrun.Client{Log: func(m string) { logger.Info(m) }}
 	drivers := map[domain.Op]provision.Driver{
 		domain.OpSRPolicySet: dry, domain.OpSRPolicyDelete: dry,
@@ -248,6 +248,19 @@ func newProvisioner(oc config.Orchestrator, res *ssot.Resources, timeout time.Du
 		closer = func() { _ = pola.Close() }
 		mon = pola
 		logger.Info("SR Policies go to PolaPCE", "address", oc.PolaPCE.Address, "path", oc.PolaPCE.Path)
+		// The startup assurance pass repairs the network: wait until Pola can take SR Policies (a
+		// Pola started with the IEL learns its PCEP sessions and TED in a few seconds). After the
+		// wait the assurance passes repair what the startup pass could not.
+		if ready > 0 {
+			wait, cancel := context.WithTimeout(ctx, ready)
+			err = pola.Wait(wait, 500*time.Millisecond)
+			cancel()
+			if err != nil {
+				logger.Warn("PolaPCE not ready, starting anyway", "err", err, "waited", ready)
+			} else {
+				logger.Info("PolaPCE ready")
+			}
+		}
 	} else {
 		logger.Info("SR Policies are dry-run (logged)")
 	}

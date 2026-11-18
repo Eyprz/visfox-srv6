@@ -5,9 +5,12 @@ package pce
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/netip"
+	"slices"
 	"strings"
+	"time"
 
 	pb "github.com/nttcom/pola/api/pola/v1"
 	"google.golang.org/grpc"
@@ -71,6 +74,61 @@ func MetricType(name string) (pb.MetricType, error) {
 		return 0, fmt.Errorf("unknown path metric %q", name)
 	}
 	return pb.MetricType(v), nil
+}
+
+// Ready reports what Pola still lacks to take the IEL's SR Policies: a PCEP session (up) to every
+// headend of Nodes and, when it checks or computes paths (Validate, Dynamic), a TED with nodes. Right
+// after Pola starts both fill in over a few seconds; an SR Policy sent before fails.
+func (p *Client) Ready(ctx context.Context) error {
+	sess, err := p.client.GetSessionList(ctx, &pb.GetSessionListRequest{})
+	if err != nil {
+		return err
+	}
+	up := map[netip.Addr]bool{}
+	for _, s := range sess.GetSessions() {
+		if a, ok := netip.AddrFromSlice(s.GetPeerAddr()); ok && s.GetState() == pb.SessionState_SESSION_STATE_UP {
+			up[a.Unmap()] = true
+		}
+	}
+	var missing []string
+	for id, a := range p.opts.Nodes {
+		if a.PCEPPeer.IsValid() && !up[a.PCEPPeer] {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		slices.Sort(missing)
+		return fmt.Errorf("no PCEP session with %s", strings.Join(missing, ", "))
+	}
+	if !p.opts.Validate && !p.opts.Dynamic {
+		return nil
+	}
+	ted, err := p.client.GetTED(ctx, &pb.GetTEDRequest{})
+	if err != nil {
+		return err
+	}
+	if !ted.GetEnabled() {
+		return errors.New("TED is disabled in Pola")
+	}
+	if len(ted.GetNodes()) == 0 {
+		return errors.New("TED is empty in Pola")
+	}
+	return nil
+}
+
+// Wait polls Ready every poll until Pola is ready or ctx ends, and returns the last error then.
+func (p *Client) Wait(ctx context.Context, poll time.Duration) error {
+	for {
+		err := p.Ready(ctx)
+		if err == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(poll):
+		}
+	}
 }
 
 // Close closes the gRPC connection.

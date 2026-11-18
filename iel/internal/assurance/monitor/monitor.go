@@ -24,7 +24,7 @@ type SwitcherSource interface {
 // Observation is what the network reported at one time.
 type Observation struct {
 	At time.Time
-	// Policies are the SR Policies; nil when there is no SR Policy source.
+	// Policies are the SR Policies; nil when there is no SR Policy source, empty when it holds none.
 	Policies []domain.SRPolicy
 	// Selections are the inputs the switchers send on (node id -> next); Unread are the switchers
 	// that could not be read, with the reason.
@@ -50,7 +50,11 @@ func Observe(ctx context.Context, src SRPolicySource, sw SwitcherSource, switche
 		if err != nil {
 			return Observation{}, err
 		}
+		// A source that holds none reports an empty list, not nil (no source).
 		obs.Policies = pols
+		if obs.Policies == nil {
+			obs.Policies = []domain.SRPolicy{}
+		}
 	}
 	if sw != nil {
 		for _, id := range switchers {

@@ -5,7 +5,9 @@ import (
 	"net"
 	"net/netip"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	pb "github.com/nttcom/pola/api/pola/v1"
 	"google.golang.org/grpc"
@@ -18,6 +20,21 @@ type fakePola struct {
 	pb.UnimplementedPCEServiceServer
 	created []*pb.CreateSRPolicyRequest
 	deleted []*pb.DeleteSRPolicyRequest
+	// sessions are the PCEP sessions that are up; ted the nodes of the TED (nil: disabled).
+	sessions []netip.Addr
+	ted      []*pb.LsNode
+}
+
+func (f *fakePola) GetSessionList(_ context.Context, _ *pb.GetSessionListRequest) (*pb.GetSessionListResponse, error) {
+	var out []*pb.Session
+	for _, a := range f.sessions {
+		out = append(out, &pb.Session{PeerAddr: a.AsSlice(), State: pb.SessionState_SESSION_STATE_UP})
+	}
+	return &pb.GetSessionListResponse{Sessions: out}, nil
+}
+
+func (f *fakePola) GetTED(_ context.Context, _ *pb.GetTEDRequest) (*pb.GetTEDResponse, error) {
+	return &pb.GetTEDResponse{Enabled: f.ted != nil, Nodes: f.ted}, nil
 }
 
 func (f *fakePola) CreateSRPolicy(_ context.Context, r *pb.CreateSRPolicyRequest) (*pb.CreateSRPolicyResponse, error) {
@@ -172,5 +189,38 @@ func TestClientDynamicPath(t *testing.T) {
 	}
 	if _, err := MetricType("fastest"); err == nil {
 		t.Fatal("unknown metric accepted")
+	}
+}
+
+func TestReady(t *testing.T) {
+	ctx := context.Background()
+	p, fake := newTestClient(t, Options{Nodes: testAddrs, Dynamic: true})
+	if err := p.Ready(ctx); err == nil || !strings.Contains(err.Error(), "no PCEP session with h1") {
+		t.Fatalf("no session: err = %v", err)
+	}
+	fake.sessions = []netip.Addr{netip.MustParseAddr("172.31.77.11")}
+	if err := p.Ready(ctx); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Fatalf("TED disabled: err = %v", err)
+	}
+	fake.ted = []*pb.LsNode{}
+	if err := p.Ready(ctx); err == nil || !strings.Contains(err.Error(), "empty") {
+		t.Fatalf("TED empty: err = %v", err)
+	}
+	fake.ted = []*pb.LsNode{{RouterId: "10.0.0.1"}}
+	if err := p.Wait(ctx, time.Millisecond); err != nil {
+		t.Fatalf("ready: %v", err)
+	}
+
+	// Explicit paths without SID validation do not need Pola's TED.
+	q, fake := newTestClient(t, Options{Nodes: testAddrs})
+	fake.sessions = []netip.Addr{netip.MustParseAddr("172.31.77.11")}
+	if err := q.Ready(ctx); err != nil {
+		t.Fatalf("explicit: %v", err)
+	}
+	fake.sessions = nil
+	wait, cancel := context.WithTimeout(ctx, 20*time.Millisecond)
+	defer cancel()
+	if err := q.Wait(wait, time.Millisecond); err == nil {
+		t.Fatal("Wait without a session: want the last error")
 	}
 }

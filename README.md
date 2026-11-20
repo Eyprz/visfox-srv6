@@ -182,6 +182,11 @@ Not yet:
 - The designer's resource estimate from the Go IEL (mock only).
 - BGP FlowSpec, a VIM (OpenStack), the channel-strip view and WebSocket transport.
 
+## Contributing
+
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Report security
+problems privately, as described in [SECURITY.md](SECURITY.md).
+
 ## License
 
 Copyright 2026 Ryuta Futami. Licensed under the [Apache License 2.0](LICENSE) (see also

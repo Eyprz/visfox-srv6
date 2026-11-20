@@ -1,0 +1,86 @@
+name: Bug report
+description: Something does not work as described.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Remove the addresses and credentials of your own network from logs.
+        Security problems go through private vulnerability reporting instead (see SECURITY.md).
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Tag or commit, or `version` from `GET /api/v1/healthz`.
+      placeholder: v0.2.1
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How do you run it?
+      options:
+        - WebUI with the in-browser mock IEL
+        - Go IEL, dry run
+        - Local C-Plane lab (Compose profile cplane)
+        - A real network
+    validations:
+      required: true
+  - type: dropdown
+    id: network
+    attributes:
+      label: Network
+      description: VISFOX_NETWORK
+      options:
+        - testbed (default)
+        - rich
+        - lab (TED from BGP-LS)
+        - my own operator config
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      multiple: true
+      options:
+        - Application Layer (WebUI)
+        - Intent-Enabled Layer (IEL)
+        - API contract (api/openapi.yaml)
+        - C-Plane lab (infra/cplane)
+        - Documentation
+        - Not sure
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start with ...
+        2. Assign preset ... to IN 1 x OUT 1
+        3. Take ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the cell state, the error message in the WebUI, or the operation log.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: IEL log (`docker compose logs visfox_iel`), browser console, or PolaPCE log.
+      render: shell
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: OS, Docker / Compose version, Go and Node.js versions, browser

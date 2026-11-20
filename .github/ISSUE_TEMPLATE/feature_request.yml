@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest a feature or an improvement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What do you want to do, and what stops you today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should VISFOX-SRv6 do? Describe it in terms of intents (IN, OUT, presets, functions) where you can.
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Layer
+      multiple: true
+      options:
+        - Application Layer (WebUI)
+        - Intent-Enabled Layer (IEL)
+        - Southbound (PolaPCE, BGP-LS, VVF control)
+        - API contract (api/openapi.yaml)
+        - C-Plane lab (infra/cplane)
+        - Documentation
+        - Not sure
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways you considered, or how you work around it now.
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Network, VVFs, references (RFCs, Internet-Drafts), screenshots.
